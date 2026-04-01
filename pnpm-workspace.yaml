@@ -1,5 +1,8 @@
 packages:
   - "apps/*"
 
+# Supply chain security: reject packages published less than 7 days ago
+minimumReleaseAge: 10080
+
 catalog:
   "@anthropic-ai/claude-agent-sdk": ^0.2.38

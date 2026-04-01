@@ -367,7 +367,7 @@ While you can run without a config file, creating one enables authenticated test
 Copy and modify the example configuration:
 
 ```bash
-cp configs/example-config.yaml ./my-app-config.yaml
+cp apps/worker/configs/example-config.yaml ./my-app-config.yaml
 ```
 
 ##### Basic Configuration Structure

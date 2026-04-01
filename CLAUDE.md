@@ -176,6 +176,8 @@ Durable workflow orchestration with crash recovery, queryable progress, intellig
 ### Security
 Defensive security tool only. Use only on systems you own or have explicit permission to test.
 
+**Supply chain hardening:** `pnpm-workspace.yaml` enforces `minimumReleaseAge: 10080` (7-day cooldown) during dependency resolution. This mainly affects `pnpm add`, `pnpm up`, lockfile regeneration, or any install that must resolve new versions. A normal `pnpm install --frozen-lockfile` against an existing valid lockfile should usually keep working unchanged. If dependency resolution fails because a package is too new, do NOT lower or disable `minimumReleaseAge`. Instead, wait for the cooldown to pass, or pin to an older version that satisfies the age requirement. For urgent security patches, add the specific package to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`.
+
 ## Code Style Guidelines
 
 ### Formatting
@@ -242,3 +244,4 @@ Comments must be **timeless** — no references to this conversation, refactorin
 - **Local apps unreachable** — Use `host.docker.internal` instead of `localhost`
 - **Missing tools** — Use `--pipeline-testing` to skip nmap/subfinder/whatweb (graceful degradation)
 - **Container permissions** — On Linux, may need `sudo` for docker commands
+- **"ERR_PNPM_NO_MATURE_MATCHING_VERSION"** — Dependency resolution selected a package version younger than the 7-day cooldown (`minimumReleaseAge`). Wait for the cooldown, pin an older version, or for urgent patches add to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`
