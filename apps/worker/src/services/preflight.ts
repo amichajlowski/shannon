@@ -21,8 +21,6 @@
 
 import { lookup } from 'node:dns/promises';
 import fs from 'node:fs/promises';
-import http from 'node:http';
-import https from 'node:https';
 import type { SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { glob } from 'zx';
@@ -423,33 +421,14 @@ async function validateCredentials(logger: ActivityLogger, apiKey?: string, prov
 
 // === Target URL Validation ===
 
-/** HTTP HEAD with TLS verification disabled — we check reachability, not certificate validity. */
-function httpHead(url: string, timeoutMs: number): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const isHttps = parsed.protocol === 'https:';
-    const transport = isHttps ? https : http;
-
-    const req = transport.request(
-      url,
-      {
-        method: 'HEAD',
-        timeout: timeoutMs,
-        ...(isHttps && { rejectUnauthorized: false }),
-      },
-      (res) => {
-        res.resume();
-        resolve(res.statusCode ?? 0);
-      },
-    );
-
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error(`Connection timed out after ${timeoutMs}ms`));
-    });
-    req.on('error', reject);
-    req.end();
+/** HTTP HEAD using fetch — handles multi-address DNS with proper fallback (happy eyeballs). */
+async function httpHead(url: string, timeoutMs: number): Promise<number> {
+  const response = await fetch(url, {
+    method: 'HEAD',
+    redirect: 'follow',
+    signal: AbortSignal.timeout(timeoutMs),
   });
+  return response.status;
 }
 
 /** Check that the target URL is reachable from inside the container. */
