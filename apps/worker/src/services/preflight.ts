@@ -19,7 +19,9 @@
  * 5. Target URL is reachable from the container (DNS + HTTP)
  */
 
-import { lookup } from 'node:dns/promises';
+import { lookup, resolve4 } from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs/promises';
 import type { SDKAssistantMessageError } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
@@ -421,14 +423,74 @@ async function validateCredentials(logger: ActivityLogger, apiKey?: string, prov
 
 // === Target URL Validation ===
 
-/** HTTP HEAD using fetch — handles multi-address DNS with proper fallback (happy eyeballs). */
+/**
+ * HTTP HEAD with manual DNS multi-address fallback.
+ *
+ * Node's fetch/http.request use dns.lookup which returns a single IP.
+ * When a hostname resolves to multiple IPs and one is unreachable,
+ * the request times out without trying the others. This function
+ * resolves all A records and tries each IP sequentially until one
+ * responds or all fail.
+ */
 async function httpHead(url: string, timeoutMs: number): Promise<number> {
-  const response = await fetch(url, {
-    method: 'HEAD',
-    redirect: 'follow',
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  return response.status;
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === 'https:';
+  const perIpTimeout = timeoutMs;
+
+  // 1. Resolve all IPv4 addresses
+  let addresses: string[];
+  try {
+    addresses = await resolve4(parsed.hostname);
+  } catch {
+    // DNS resolution failed — fall back to direct fetch so the error propagates naturally
+    const response = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.status;
+  }
+
+  if (addresses.length === 0) {
+    throw new Error(`DNS resolved zero addresses for ${parsed.hostname}`);
+  }
+
+  // 2. Try each IP until one succeeds
+  let lastError: Error | undefined;
+  for (const ip of addresses) {
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const transport = isHttps ? https : http;
+        const req = transport.request(
+          url,
+          {
+            method: 'HEAD',
+            timeout: perIpTimeout,
+            ...(isHttps && { rejectUnauthorized: false }),
+            // Force connection to this specific IP while keeping the Host header correct
+            hostname: ip,
+            host: undefined,
+            headers: { Host: parsed.host },
+          },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.on('timeout', () => {
+          req.destroy();
+          reject(new Error(`Connection to ${ip} timed out after ${perIpTimeout}ms`));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      return status;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw lastError ?? new Error(`All ${addresses.length} addresses for ${parsed.hostname} failed`);
 }
 
 /** Check that the target URL is reachable from inside the container. */
