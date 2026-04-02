@@ -89,6 +89,7 @@ IMPORTANT: Do NOT reorder the existing per-class report sections. Maintain the e
      NOTE: these sections will contain vulnerability lists with IDs matching pattern `### [TYPE]-VULN-[NUMBER]`
      * `# [Type] {{REPORT_VULN_HEADING}}`
      * `## {{REPORT_VULN_SUBHEADING}}`
+     * `**Screenshots:**` lines and screenshot file references (e.g., `screenshots/*.png`) within vulnerability entries — these are mandatory evidence and MUST NOT be removed
 {{REPORT_FILTER_RULES}}
    - REMOVE ANY OTHER SECTIONS (even if they contain vulnerability IDs), such as:
      * `## Potential Vulnerabilities (Validation Blocked)` (All agents)
@@ -109,5 +110,9 @@ IMPORTANT: Do NOT reorder the existing per-class report sections. Maintain the e
    - Save as the modified `.shannon/deliverables/comprehensive_security_assessment_report.md`
 
 CRITICAL: You are modifying the existing concatenated report at `.shannon/deliverables/comprehensive_security_assessment_report.md` IN-PLACE, not creating a separate file.
+
+5. If any exploitation evidence sections reference screenshots in `.shannon/deliverables/screenshots/`, add this note at the end of the Executive Summary:
+
+   **Evidence Artifacts:** Visual screenshot evidence (pre/post exploitation state) is available in the `.shannon/deliverables/screenshots/` directory alongside this report. Screenshot references within each vulnerability entry link to the corresponding evidence files.
 </instructions>
 
