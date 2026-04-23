@@ -84,6 +84,83 @@ pnpm biome:fix                       # Auto-fix lint, format, and import sorting
 
 **Options:** `-c <file>` (YAML config), `-o <path>` (output directory), `-w <name>` (named workspace; auto-resumes if exists), `--pipeline-testing` (minimal prompts, 10s retries), `--debug` (preserve worker container after exit for log inspection)
 
+## Fork Maintenance Workflow (MANDATORY)
+
+> **This repository is a fork of `KeygraphHQ/shannon`.** All AI agents and humans working on this codebase MUST follow this workflow. Deviating causes merge chaos on upstream syncs.
+
+### Remotes
+
+- `origin` → `amichajlowski/shannon` (this fork)
+- `upstream` → `KeygraphHQ/shannon` (source of truth)
+
+If `upstream` is missing: `git remote add upstream https://github.com/KeygraphHQ/shannon.git`
+
+### Branch Structure (Soft-Fork Pattern)
+
+- **`main`** — mirror of `upstream/main`. **NEVER commit directly here.** Ever.
+- **`feat/*`** — each local customization lives on its own feature branch, rooted on `main`.
+- **`local/integration`** — merges `main` + all active `feat/*` branches. This is the deployment/working branch.
+
+Current feature branches (update as new ones are created):
+- `feat/interactive-auth` — `shannon auth` command, Playwright session capture, INTERACTIVE login type
+- `feat/screenshot-evidence` — mandatory pre/post screenshot protocol for exploit agents
+- `feat/preflight-dns-fallback` — DNS multi-address fallback in preflight URL check
+
+### Rules for AI Agents and Humans
+
+1. **NEVER commit directly to `main`.** Main exists solely to mirror `upstream/main`.
+2. **Every local change goes on a `feat/*` branch.** Bug fix, docs update, config tweak — all branch-scoped.
+3. **Before starting any work:** `git checkout feat/<existing>` or `git checkout -b feat/<new> main`.
+4. **Related fixes live on the same feature branch**, not scattered across main.
+5. **Always use `--force-with-lease`** (not `--force`) when pushing rebased branches. Ask the user before force-pushing any shared branch.
+6. **Keep `git rerere` enabled:** `git config rerere.enabled true`. It memorizes conflict resolutions across rebases — huge time-saver.
+7. **If a feature is broadly useful** (not GridDynamics-specific config), open an upstream PR to `KeygraphHQ/shannon` instead of keeping it forked. Zero long-term maintenance burden.
+
+### Syncing with Upstream
+
+When `upstream/main` has new commits, follow this sequence exactly:
+
+```bash
+# 1. Reset main to upstream (main is a mirror — no commits of our own)
+git checkout main
+git fetch upstream
+git reset --hard upstream/main
+git push origin main --force-with-lease
+
+# 2. Rebase each feature branch onto the new main
+for branch in feat/interactive-auth feat/screenshot-evidence feat/preflight-dns-fallback; do
+  git checkout "$branch"
+  git rebase main
+  # Resolve conflicts (scoped to this feature only — small blast radius)
+  git push origin "$branch" --force-with-lease
+done
+
+# 3. Rebuild local/integration from scratch
+git checkout local/integration
+git reset --hard main
+git merge --no-ff feat/interactive-auth feat/screenshot-evidence feat/preflight-dns-fallback
+git push origin local/integration --force-with-lease
+```
+
+### Starting a New Feature
+
+```bash
+git checkout main
+git fetch upstream && git reset --hard upstream/main  # always start from fresh main
+git checkout -b feat/<feature-name>
+# ... make changes, commit ...
+git push -u origin feat/<feature-name>
+# Later: merge into local/integration via the sync workflow above
+```
+
+### Why This Pattern
+
+- Conflicts localize to the feature that touches the same files upstream changed → small, reviewable resolutions
+- Dropping a feature = removing one merge, not surgery
+- Each `feat/*` branch is upstream-PR-ready at any time
+- Clear mental model: "main = theirs, feat/* = ours, local/integration = what we deploy"
+- `git log main` stays readable forever — it's just upstream's history
+
 ## Architecture
 
 ### Monorepo Layout
