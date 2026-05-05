@@ -8,3 +8,4 @@ dist/
 repos/
 .turbo/
 audit-logs/
+.DS_Store
