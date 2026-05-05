@@ -21,7 +21,7 @@ import { ApplicationFailure, Context, heartbeat } from '@temporalio/activity';
 import { writeUserSettingsForCodePathAvoids } from '../ai/settings-writer.js';
 import { AuditSession } from '../audit/index.js';
 import type { ResumeAttempt } from '../audit/metrics-tracker.js';
-import { generateSessionJsonPath, type SessionMetadata } from '../audit/utils.js';
+import { copyDeliverablesToAudit, generateSessionJsonPath, type SessionMetadata } from '../audit/utils.js';
 import type { WorkflowSummary } from '../audit/workflow-logger.js';
 import type { CheckpointContext } from '../interfaces/checkpoint-provider.js';
 import { DEFAULT_DELIVERABLES_SUBDIR, deliverablesDir } from '../paths.js';
@@ -133,7 +133,7 @@ function buildContainerConfig(input: ActivityInput): ContainerConfig {
  * 4. Error classification for Temporal retry
  */
 async function runAgentActivity(agentName: AgentName, input: ActivityInput): Promise<AgentMetrics> {
-  const { repoPath, configPath, pipelineTestingMode = false, workflowId, webUrl } = input;
+  const { repoPath, configPath, pipelineTestingMode = false, workflowId, sessionId, webUrl } = input;
 
   // Skip guard: the checkpoint provider decides whether to run the agent.
   // The default NoOp provider always returns { skip: false }.
@@ -179,6 +179,7 @@ async function runAgentActivity(agentName: AgentName, input: ActivityInput): Pro
         webUrl,
         repoPath,
         deliverablesPath,
+        sessionId,
         configPath,
         pipelineTestingMode,
         attemptNumber,
@@ -821,7 +822,18 @@ export async function logWorkflowComplete(input: ActivityInput, summary: Workflo
   // 5. Write completion entry to workflow.log
   await auditSession.logWorkflowComplete(cumulativeSummary);
 
-  // 6. Clean up container
+  // 6. Copy deliverables (including screenshots/) from the repo overlay into the
+  // workspace so the audit trail is self-contained. Best-effort: log and continue.
+  try {
+    await copyDeliverablesToAudit(sessionMetadata, input.repoPath, input.deliverablesSubdir);
+  } catch (copyErr) {
+    const logger = createActivityLogger();
+    logger.error('Failed to copy deliverables to workspace', {
+      error: copyErr instanceof Error ? copyErr.message : String(copyErr),
+    });
+  }
+
+  // 7. Clean up container
   removeContainer(workflowId);
 }
 

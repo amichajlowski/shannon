@@ -11,8 +11,9 @@
  * All functions are pure and crash-safe.
  */
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { WORKSPACES_DIR } from '../paths.js';
+import { deliverablesDir, WORKSPACES_DIR } from '../paths.js';
 import { ensureDirectory } from '../utils/file-io.js';
 
 export type { SessionMetadata } from '../types/audit.js';
@@ -96,4 +97,39 @@ export async function initializeAuditStructure(sessionMetadata: SessionMetadata)
   await ensureDirectory(agentsPath);
   await ensureDirectory(promptsPath);
   await ensureDirectory(deliverablesPath);
+}
+
+/**
+ * Copy deliverable files (including subdirectories such as screenshots/) from the
+ * repo's writable overlay into the workspace for a self-contained audit trail.
+ * No-ops if source directory doesn't exist. Idempotent and parallel-safe.
+ */
+export async function copyDeliverablesToAudit(
+  sessionMetadata: SessionMetadata,
+  repoPath: string,
+  deliverablesSubdir?: string,
+): Promise<void> {
+  const sourceDir = deliverablesDir(repoPath, deliverablesSubdir);
+  const destDir = path.join(generateAuditPath(sessionMetadata), 'deliverables');
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(sourceDir);
+  } catch {
+    return;
+  }
+
+  await ensureDirectory(destDir);
+
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry);
+    const destPath = path.join(destDir, entry);
+
+    const stat = await fs.stat(sourcePath);
+    if (stat.isFile()) {
+      await fs.copyFile(sourcePath, destPath);
+    } else if (stat.isDirectory()) {
+      await fs.cp(sourcePath, destPath, { recursive: true });
+    }
+  }
 }
