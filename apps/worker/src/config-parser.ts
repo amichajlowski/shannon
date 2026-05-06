@@ -9,6 +9,7 @@ import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import type { FormatsPlugin } from 'ajv-formats';
 import yaml from 'js-yaml';
 import { fs } from 'zx';
+import { validateAuthHeaders } from './services/auth-headers.js';
 import { PentestError } from './services/error-handling.js';
 import {
   ALL_VULN_CLASSES,
@@ -440,6 +441,23 @@ const performSecurityValidation = (config: Config): void => {
       }
     }
 
+    if (auth.auth_headers) {
+      validateAuthHeaders(auth.auth_headers, 'authentication.auth_headers');
+      for (const [name, value] of Object.entries(auth.auth_headers)) {
+        for (const pattern of DANGEROUS_PATTERNS) {
+          if (pattern.test(value)) {
+            throw new PentestError(
+              `authentication.auth_headers.${name} contains potentially dangerous pattern: ${pattern.source}`,
+              'config',
+              false,
+              { field: `auth_headers.${name}`, pattern: pattern.source },
+              ErrorCode.CONFIG_VALIDATION_FAILED,
+            );
+          }
+        }
+      }
+    }
+
     if (auth.login_flow) {
       auth.login_flow.forEach((step, index) => {
         for (const pattern of DANGEROUS_PATTERNS) {
@@ -704,14 +722,23 @@ export const distributeConfig = (config: Config | null): DistributedConfig => {
 };
 
 const sanitizeAuthentication = (auth: Authentication): Authentication => {
+  const credentials = auth.credentials
+    ? {
+        username: auth.credentials.username.trim(),
+        password: auth.credentials.password,
+        ...(auth.credentials.totp_secret && { totp_secret: auth.credentials.totp_secret.trim() }),
+      }
+    : undefined;
+
+  const auth_headers = auth.auth_headers
+    ? Object.freeze(Object.fromEntries(Object.entries(auth.auth_headers).map(([k, v]) => [k.trim(), v])))
+    : undefined;
+
   return {
     login_type: auth.login_type.toLowerCase().trim() as Authentication['login_type'],
     login_url: auth.login_url.trim(),
-    credentials: {
-      username: auth.credentials.username.trim(),
-      password: auth.credentials.password,
-      ...(auth.credentials.totp_secret && { totp_secret: auth.credentials.totp_secret.trim() }),
-    },
+    ...(credentials && { credentials }),
+    ...(auth_headers && { auth_headers }),
     ...(auth.login_flow && { login_flow: auth.login_flow.map((step) => step.trim()) }),
     success_condition: {
       type: auth.success_condition.type.toLowerCase().trim() as Authentication['success_condition']['type'],

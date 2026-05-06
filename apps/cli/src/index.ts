@@ -19,6 +19,7 @@ import { start } from './commands/start.js';
 import { status } from './commands/status.js';
 import { stop } from './commands/stop.js';
 import { uninstall } from './commands/uninstall.js';
+import { verifyAuth } from './commands/verify-auth.js';
 import { workspaces } from './commands/workspaces.js';
 import { getMode } from './mode.js';
 import { displaySplash } from './splash.js';
@@ -68,6 +69,7 @@ Usage:${
   ${prefix} setup                                       Configure credentials`
   }
   ${prefix} start --url <url> --repo <path> [options]   Start a pentest scan
+  ${prefix} verify-auth -c <config.yaml>                 Verify auth_headers against the live target
   ${prefix} stop [--clean]                               Stop all containers
   ${prefix} workspaces                                   List all workspaces
   ${prefix} logs <workspace>                             Tail workflow log
@@ -237,6 +239,26 @@ switch (command) {
   case 'build':
     build(args.includes('--no-cache'));
     break;
+  case 'verify-auth': {
+    let configArg: string | undefined;
+    for (let i = 1; i < args.length; i++) {
+      const a = args[i];
+      const next = args[i + 1];
+      if ((a === '-c' || a === '--config') && next && !next.startsWith('-')) {
+        configArg = next;
+        i++;
+      }
+    }
+    if (!configArg) {
+      console.error('ERROR: --config <path> is required');
+      console.error(
+        `Usage: ${getMode() === 'local' ? './shannon' : 'npx @keygraph/shannon'} verify-auth -c <config.yaml>`,
+      );
+      process.exit(1);
+    }
+    verifyAuth({ config: configArg, version: getVersion() });
+    break;
+  }
   case 'uninstall':
     if (getMode() === 'local') {
       console.error('ERROR: uninstall is only available in npx mode.');

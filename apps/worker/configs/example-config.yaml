@@ -96,6 +96,24 @@ rules:
 #     Drop findings about missing security headers and rate-limit gaps.
 #     ...
 
+# --- API authentication via static headers (no browser login) ---
+# For targets that authenticate via static HTTP headers (X-API-Key, Authorization
+# Bearer, etc.). Replaces the credentials block; no Playwright login is needed.
+# Verify the headers before scanning with: ./shannon verify-auth -c <this file>
+#
+# Save this file with a `.local.yaml` suffix so secrets stay gitignored:
+#   apps/worker/configs/<target>-api.local.yaml
+#
+# authentication:
+#   login_type: api
+#   login_url: "https://api.example.com/v1/auth/me"
+#   auth_headers:
+#     X-API-Key: "your_api_key_here"
+#     X-User-Email: "you@example.com"
+#   success_condition:
+#     type: status_code        # or 'body_contains' for body-based checks
+#     value: "200"             # comma list ('200,204') and 2xx wildcards supported
+
 # Pipeline execution settings (optional)
 # pipeline:
 #   retry_preset: subscription          # 'default' or 'subscription' (6h max retry for rate limit recovery)

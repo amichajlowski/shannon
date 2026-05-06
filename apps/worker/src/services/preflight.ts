@@ -29,9 +29,10 @@ import { glob } from 'zx';
 import { resolveModel } from '../ai/models.js';
 import { parseConfig } from '../config-parser.js';
 import type { ActivityLogger } from '../types/activity-logger.js';
-import type { Config, Rule } from '../types/config.js';
+import type { Authentication, Config, Rule } from '../types/config.js';
 import { ErrorCode } from '../types/errors.js';
 import { err, ok, type Result } from '../types/result.js';
+import { evaluateApiSuccessCondition, maskAuthHeaders } from './auth-headers.js';
 import { isRetryableError, PentestError } from './error-handling.js';
 
 const TARGET_URL_TIMEOUT_MS = 10_000;
@@ -42,7 +43,11 @@ function isLoopbackAddress(address: string): boolean {
 
 // === Repository Validation ===
 
-async function validateRepo(repoPath: string, logger: ActivityLogger, skipGitCheck?: boolean): Promise<Result<void, PentestError>> {
+async function validateRepo(
+  repoPath: string,
+  logger: ActivityLogger,
+  skipGitCheck?: boolean,
+): Promise<Result<void, PentestError>> {
   logger.info('Checking repository path...', { repoPath });
 
   // 1. Check repo directory exists
@@ -254,11 +259,17 @@ function classifySdkError(sdkError: SDKAssistantMessageError, authType: string):
 }
 
 /** Validate credentials via a minimal Claude Agent SDK query. */
-async function validateCredentials(logger: ActivityLogger, apiKey?: string, providerConfig?: import('../types/config.js').ProviderConfig): Promise<Result<void, PentestError>> {
+async function validateCredentials(
+  logger: ActivityLogger,
+  apiKey?: string,
+  providerConfig?: import('../types/config.js').ProviderConfig,
+): Promise<Result<void, PentestError>> {
   // 0. If providerConfig is present, credentials are managed by the caller.
   //    The executor will map providerConfig directly to sdkEnv — no process.env needed.
   if (providerConfig) {
-    logger.info(`Provider config present (type: ${providerConfig.providerType || 'anthropic_api'}) — skipping env-based credential validation`);
+    logger.info(
+      `Provider config present (type: ${providerConfig.providerType || 'anthropic_api'}) — skipping env-based credential validation`,
+    );
     return ok(undefined);
   }
 
@@ -526,6 +537,119 @@ async function validateTargetUrl(targetUrl: string, logger: ActivityLogger): Pro
   }
 }
 
+// === Auth Headers Verification ===
+
+const AUTH_VERIFY_TIMEOUT_MS = 10_000;
+const AUTH_VERIFY_MAX_BODY_BYTES = 64 * 1024;
+
+interface HttpResponse {
+  status: number;
+  body: string;
+}
+
+/**
+ * HTTP GET with custom headers, TLS verification disabled (matches httpHead).
+ * Reads at most {@link AUTH_VERIFY_MAX_BODY_BYTES} of the response body.
+ */
+function httpRequest(url: string, headers: Record<string, string>, timeoutMs: number): Promise<HttpResponse> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const isHttps = parsed.protocol === 'https:';
+    const transport = isHttps ? https : http;
+
+    const req = transport.request(
+      url,
+      {
+        method: 'GET',
+        headers,
+        timeout: timeoutMs,
+        ...(isHttps && { rejectUnauthorized: false }),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let bytesRead = 0;
+        res.on('data', (chunk: Buffer) => {
+          if (bytesRead < AUTH_VERIFY_MAX_BODY_BYTES) {
+            const remaining = AUTH_VERIFY_MAX_BODY_BYTES - bytesRead;
+            chunks.push(chunk.length <= remaining ? chunk : chunk.subarray(0, remaining));
+            bytesRead += chunk.length;
+          }
+        });
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+        res.on('error', reject);
+      },
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`Connection timed out after ${timeoutMs}ms`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
+ * Verify static auth headers against the target by issuing one GET to login_url.
+ * Skipped unless login_type === 'api' and auth_headers are present.
+ *
+ * Header values are NEVER logged in full — only masked names + values appear
+ * in info/error output. The verification request itself uses the real values.
+ */
+async function verifyAuthHeaders(
+  auth: Authentication | undefined,
+  logger: ActivityLogger,
+): Promise<Result<void, PentestError>> {
+  if (!auth || auth.login_type !== 'api' || !auth.auth_headers) {
+    return ok(undefined);
+  }
+
+  const masked = maskAuthHeaders(auth.auth_headers);
+  logger.info('Verifying auth headers...', { login_url: auth.login_url, headers: masked });
+
+  let response: HttpResponse;
+  try {
+    response = await httpRequest(auth.login_url, { ...auth.auth_headers }, AUTH_VERIFY_TIMEOUT_MS);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return err(
+      new PentestError(
+        `Auth header verification request failed: ${detail}`,
+        'network',
+        true,
+        { login_url: auth.login_url, headers: masked },
+        ErrorCode.TARGET_UNREACHABLE,
+      ),
+    );
+  }
+
+  const result = evaluateApiSuccessCondition(response.status, response.body, auth.success_condition);
+  if (!result.ok) {
+    return err(
+      new PentestError(
+        `Auth headers rejected by target: ${result.reason}`,
+        'config',
+        false,
+        {
+          login_url: auth.login_url,
+          headers: masked,
+          status: response.status,
+          condition: auth.success_condition,
+        },
+        ErrorCode.AUTH_FAILED,
+      ),
+    );
+  }
+
+  logger.info(`Auth headers OK (${result.reason})`);
+  return ok(undefined);
+}
+
 // === Preflight Orchestrator ===
 
 /**
@@ -585,6 +709,14 @@ export async function runPreflightChecks(
     return urlResult;
   }
 
+  // 6. Auth headers verification (only when login_type=api). Cheap — 1 HTTP round-trip.
+  const authHeadersResult = await verifyAuthHeaders(parsedConfig?.authentication, logger);
+  if (!authHeadersResult.ok) {
+    return authHeadersResult;
+  }
+
   logger.info('All preflight checks passed');
   return ok(undefined);
 }
+
+export { verifyAuthHeaders };

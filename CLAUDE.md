@@ -84,6 +84,17 @@ pnpm biome:fix                       # Auto-fix lint, format, and import sorting
 
 **Options:** `-c <file>` (YAML config), `-o <path>` (output directory), `-w <name>` (named workspace; auto-resumes if exists), `--pipeline-testing` (minimal prompts, 10s retries), `--debug` (preserve worker container after exit for log inspection)
 
+### Verifying API auth headers
+
+For targets that authenticate via static HTTP headers, verify the headers reach the target before launching a scan:
+
+```bash
+./shannon verify-auth -c apps/worker/configs/<target>-api.local.yaml
+# 0 = headers accepted, 1 = rejected (config invalid, network error, or 401/403)
+```
+
+The check runs inside the worker container, so DNS, TLS trust, and egress match a real scan. The same verification runs automatically during `./shannon start` preflight; this command lets you test header changes without spawning the full pipeline.
+
 ## Architecture
 
 ### Monorepo Layout
@@ -144,7 +155,7 @@ Durable workflow orchestration with crash recovery, queryable progress, intellig
 5. **Reporting** (`report`) — Executive-level security report
 
 ### Supporting Systems
-- **Configuration** — YAML configs in `apps/worker/configs/` with JSON Schema validation (`config-schema.json`). Supports auth settings (MFA/TOTP), URL/code rule scoping (`rules.avoid`/`rules.focus`), run-scope steering (`vuln_classes`, `exploit`), free-form `rules_of_engagement`, and post-hoc `report` filters (`min_severity`, `min_confidence`, `guidance`). `code_path` avoid rules are written into `~/.claude/settings.json` `permissions.deny` (`Read`/`Edit`) once per workflow by `apps/worker/src/temporal/activities.ts:syncCodePathDenyRules` so the SDK enforces them at the tool layer even in `bypassPermissions` mode. `vuln_classes`/`exploit` scope is locked into `session.json` on first run; resumes with a different scope fail fast (`persistOrValidateRunScope`). Credential resolution — local mode: env vars → `./.env`; npx mode: env vars → `~/.shannon/config.toml` (via `shn setup`)
+- **Configuration** — YAML configs in `apps/worker/configs/` with JSON Schema validation (`config-schema.json`). Supports auth settings (MFA/TOTP for browser flows; static `auth_headers` for `login_type: api`), URL/code rule scoping (`rules.avoid`/`rules.focus`), run-scope steering (`vuln_classes`, `exploit`), free-form `rules_of_engagement`, and post-hoc `report` filters (`min_severity`, `min_confidence`, `guidance`). For `login_type: api`, header values are verified against the live target via `./shannon verify-auth -c <config>` (and again automatically during preflight on `start`); failure aborts before any agent runs. `success_condition.type` supports `url_contains`/`url_equals_exactly`/`element_present`/`text_contains` (browser flows) and `status_code`/`body_contains` (API). Configs that contain secrets should be saved with the `*.local.yaml` suffix (gitignored). `code_path` avoid rules are written into `~/.claude/settings.json` `permissions.deny` (`Read`/`Edit`) once per workflow by `apps/worker/src/temporal/activities.ts:syncCodePathDenyRules` so the SDK enforces them at the tool layer even in `bypassPermissions` mode. `vuln_classes`/`exploit` scope is locked into `session.json` on first run; resumes with a different scope fail fast (`persistOrValidateRunScope`). Credential resolution — local mode: env vars → `./.env`; npx mode: env vars → `~/.shannon/config.toml` (via `shn setup`)
 - **Prompts** — Per-phase templates in `apps/worker/prompts/` with variable substitution (`{{TARGET_URL}}`, `{{CONFIG_CONTEXT}}`). Shared partials in `apps/worker/prompts/shared/` via `apps/worker/src/services/prompt-manager.ts`, including `_code-path-rules.txt` (focus/avoid `[FILE]`/`[GLOB]` routing) and `_rules-of-engagement.txt` (free-text engagement rules). When `exploit: false`, `apps/worker/src/services/findings-renderer.ts` deterministically converts each `*_exploitation_queue.json` into a `*_findings.md` for report assembly — no LLM in the loop
 - **SDK Integration** — Uses `@anthropic-ai/claude-agent-sdk` with `maxTurns: 10_000` and `bypassPermissions` mode. Adaptive thinking is enabled by default on Opus 4.6/4.7 (`supportsAdaptiveThinking` in `apps/worker/src/ai/models.ts`); disable per-scan via `CLAUDE_ADAPTIVE_THINKING=false` (env) or `core.adaptive_thinking = false` (npx TOML). Browser automation via `playwright-cli` with session isolation (`-s=<session>`). TOTP generation via `generate-totp` CLI tool. Login flow template at `apps/worker/prompts/shared/login-instructions.txt` supports form, SSO, API, and basic auth
 - **Audit System** — Crash-safe append-only logging in `workspaces/{hostname}_{sessionId}/`. Tracks session metrics, per-agent logs, prompts, and deliverables. WorkflowLogger (`apps/worker/src/audit/workflow-logger.ts`) provides unified human-readable per-workflow logs, backed by LogStream (`apps/worker/src/audit/log-stream.ts`) shared stream primitive

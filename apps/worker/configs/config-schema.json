@@ -55,13 +55,35 @@
           "minItems": 1,
           "maxItems": 20
         },
+        "auth_headers": {
+          "type": "object",
+          "description": "Static HTTP headers to attach to every request. Required when login_type is 'api'.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9-]+$",
+            "maxLength": 64
+          },
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "minProperties": 1,
+          "maxProperties": 20
+        },
         "success_condition": {
           "type": "object",
           "description": "Condition that indicates successful authentication",
           "properties": {
             "type": {
               "type": "string",
-              "enum": ["url_contains", "element_present", "url_equals_exactly", "text_contains"],
+              "enum": [
+                "url_contains",
+                "element_present",
+                "url_equals_exactly",
+                "text_contains",
+                "status_code",
+                "body_contains"
+              ],
               "description": "Type of success condition to check"
             },
             "value": {
@@ -75,7 +97,25 @@
           "additionalProperties": false
         }
       },
-      "required": ["login_type", "login_url", "credentials", "success_condition"],
+      "required": ["login_type", "login_url", "success_condition"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "login_type": { "enum": ["form", "sso", "basic"] }
+            },
+            "required": ["login_type"]
+          },
+          "then": { "required": ["credentials"] }
+        },
+        {
+          "if": {
+            "properties": { "login_type": { "const": "api" } },
+            "required": ["login_type"]
+          },
+          "then": { "required": ["auth_headers"] }
+        }
+      ],
       "additionalProperties": false
     },
     "pipeline": {

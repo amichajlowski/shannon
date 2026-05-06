@@ -37,6 +37,24 @@ Execute the login flow based on the login_type specified in the configuration:
 4. Ensure all consent and authorization steps are explicitly handled
 <!-- END:SSO -->
 
+<!-- BEGIN:API -->
+**API authentication via static headers (no browser login):**
+
+This target uses a fixed set of HTTP headers for authentication. Attach them to every request against the target — curl, fetch, and (where supported) Playwright navigations.
+
+Required headers (use exact names and values):
+{{AUTH_HEADERS_RENDERED}}
+
+For curl-based probes, append these flags to every request:
+{{AUTH_HEADERS_CURL_FLAGS}}
+
+For Playwright: if the playwright-cli skill exposes `set-extra-http-headers` (or equivalent), apply the same headers to the browser context before any navigation. If it does not, prefer `curl`/`fetch` for header-authenticated endpoints — browser navigations without these headers will hit 401/403.
+
+Verification: Shannon's preflight already confirmed these headers are accepted by the target. If you see 401 or 403 mid-scan, the key was rotated or revoked — stop and report. Do not retry indefinitely.
+
+Do NOT attempt a browser or form login. Do NOT execute any login_flow steps for this target — none apply.
+<!-- END:API -->
+
 <!-- BEGIN:VERIFICATION -->
 </authentication_execution>
 

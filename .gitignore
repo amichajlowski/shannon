@@ -5,3 +5,4 @@ credentials/
 dist/
 repos/
 .turbo/
+apps/worker/configs/*.local.yaml

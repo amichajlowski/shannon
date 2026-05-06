@@ -36,8 +36,16 @@ export interface ReportConfig {
 
 export type LoginType = 'form' | 'sso' | 'api' | 'basic';
 
+export type SuccessConditionType =
+  | 'url_contains'
+  | 'element_present'
+  | 'url_equals_exactly'
+  | 'text_contains'
+  | 'status_code'
+  | 'body_contains';
+
 export interface SuccessCondition {
-  type: 'url_contains' | 'element_present' | 'url_equals_exactly' | 'text_contains';
+  type: SuccessConditionType;
   value: string;
 }
 
@@ -47,10 +55,17 @@ export interface Credentials {
   totp_secret?: string;
 }
 
+/**
+ * Static HTTP headers attached to every request when login_type is "api".
+ * Header names match `^[A-Za-z0-9-]+$`; values may not contain CR/LF/NUL.
+ */
+export type AuthHeaders = Readonly<Record<string, string>>;
+
 export interface Authentication {
   login_type: LoginType;
   login_url: string;
-  credentials: Credentials;
+  credentials?: Credentials;
+  auth_headers?: AuthHeaders;
   login_flow?: string[];
   success_condition: SuccessCondition;
 }

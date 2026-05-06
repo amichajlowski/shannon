@@ -8,9 +8,25 @@ import { fs, path } from 'zx';
 import { PROMPTS_DIR } from '../paths.js';
 import { PLAYWRIGHT_SESSION_MAPPING } from '../session-manager.js';
 import type { ActivityLogger } from '../types/activity-logger.js';
-import type { Authentication, DistributedConfig, ReportConfig, Rule, VulnClass } from '../types/config.js';
+import type { Authentication, AuthHeaders, DistributedConfig, ReportConfig, Rule, VulnClass } from '../types/config.js';
 import { isGlobPattern } from '../utils/glob.js';
 import { handlePromptError, PentestError } from './error-handling.js';
+
+/**
+ * Render the API auth section with header values inlined.
+ *
+ * Header values appear verbatim — agents need them to make authenticated
+ * requests. Operational logs mask values via {@link maskAuthHeaders}; this
+ * function intentionally does not.
+ */
+function renderApiSection(section: string, headers: AuthHeaders): string {
+  const entries = Object.entries(headers);
+  const headersBlock =
+    entries.length > 0 ? entries.map(([name, value]) => `  ${name}: ${value}`).join('\n') : '  (none)';
+  const curlFlags =
+    entries.length > 0 ? entries.map(([name, value]) => `  -H "${name}: ${value}"`).join(' \\\n') : '  (none)';
+  return section.replace(/{{AUTH_HEADERS_RENDERED}}/g, headersBlock).replace(/{{AUTH_HEADERS_CURL_FLAGS}}/g, curlFlags);
+}
 
 function renderCodePathRules(rules: Rule[]): string {
   const filtered = rules.filter((r) => r.type === 'code_path');
@@ -152,11 +168,23 @@ async function buildLoginInstructions(
     const loginType = authentication.login_type?.toUpperCase();
     let loginInstructions = '';
 
+    const authSection = loginType ? getSection(fullTemplate, loginType) : '';
+
+    // 3. Assemble instructions per login type. API mode is browser-less:
+    //    skip COMMON (Playwright preamble) and VERIFICATION (DOM checks),
+    //    render only the API block with header substitution.
+    if (loginType === 'API') {
+      if (!authSection) {
+        throw new PentestError('Login instructions API section is missing', 'prompt', false, { loginType });
+      }
+      loginInstructions = renderApiSection(authSection, authentication.auth_headers ?? {});
+      return loginInstructions;
+    }
+
     const commonSection = getSection(fullTemplate, 'COMMON');
-    const authSection = loginType ? getSection(fullTemplate, loginType) : ''; // FORM or SSO
     const verificationSection = getSection(fullTemplate, 'VERIFICATION');
 
-    // 3. Assemble instructions from sections (fallback to full template if markers missing)
+    // 4. Assemble instructions from sections (fallback to full template if markers missing)
     if (!commonSection && !authSection && !verificationSection) {
       logger.warn('Section markers not found, using full login instructions template');
       loginInstructions = fullTemplate;
@@ -164,7 +192,7 @@ async function buildLoginInstructions(
       loginInstructions = [commonSection, authSection, verificationSection].filter((section) => section).join('\n\n');
     }
 
-    // 4. Interpolate login flow and credential placeholders
+    // 5. Interpolate login flow and credential placeholders
     let userInstructions = (authentication.login_flow ?? []).join('\n');
 
     if (authentication.credentials) {
@@ -184,7 +212,7 @@ async function buildLoginInstructions(
 
     loginInstructions = loginInstructions.replace(/{{user_instructions}}/g, userInstructions);
 
-    // 5. Replace TOTP secret placeholder if present in template
+    // 6. Replace TOTP secret placeholder if present in template
     if (authentication.credentials?.totp_secret) {
       loginInstructions = loginInstructions.replace(/{{totp_secret}}/g, authentication.credentials.totp_secret);
     }
@@ -237,14 +265,19 @@ function buildAuthContext(config: DistributedConfig | null): string {
   }
 
   const auth = config.authentication;
-  const lines = [
-    `- Login type: ${auth.login_type.toUpperCase()}`,
-    `- Username: ${auth.credentials.username}`,
-    `- Login URL: ${auth.login_url}`,
-  ];
+  const lines = [`- Login type: ${auth.login_type.toUpperCase()}`, `- Login URL: ${auth.login_url}`];
+
+  if (auth.credentials?.username) {
+    lines.push(`- Username: ${auth.credentials.username}`);
+  }
 
   if (auth.credentials?.totp_secret) {
     lines.push('- MFA: TOTP enabled');
+  }
+
+  if (auth.auth_headers) {
+    const names = Object.keys(auth.auth_headers).join(', ');
+    lines.push(`- Auth headers: ${names}`);
   }
 
   return lines.join('\n');
@@ -306,8 +339,10 @@ async function interpolateVariables(
       result = result.replace(/<rules_of_engagement>[\s\S]*?<\/rules_of_engagement>\s*/g, '');
     }
 
-    if (config?.authentication?.login_flow) {
-      const loginInstructions = await buildLoginInstructions(config.authentication, logger, promptsBaseDir);
+    const auth = config?.authentication;
+    const needsLoginInstructions = !!(auth && (auth.login_flow || auth.login_type === 'api'));
+    if (needsLoginInstructions && auth) {
+      const loginInstructions = await buildLoginInstructions(auth, logger, promptsBaseDir);
       result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, loginInstructions);
     } else {
       result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, '');
