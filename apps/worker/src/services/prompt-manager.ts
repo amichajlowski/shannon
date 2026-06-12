@@ -335,6 +335,16 @@ async function interpolateVariables(
     if (config?.authentication?.login_flow) {
       const loginInstructions = await buildLoginInstructions(config.authentication, logger, promptsBaseDir);
       result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, loginInstructions);
+    } else if (config?.authentication && !config.authentication.credentials) {
+      // Pre-authenticated session mode (--auth-state): no credentials and no login flow.
+      // The session is restored out-of-band, so there is no interactive login to fall back
+      // to. Tell the agent to stop rather than follow the (empty) fall-through path.
+      result = result.replace(
+        /{{LOGIN_INSTRUCTIONS}}/g,
+        'A pre-authenticated session was supplied out-of-band and restored before this step. No login flow is ' +
+          'configured and no credentials are available. If session restoration or verification fails, STOP and ' +
+          'report that the supplied session is stale or invalid — do not attempt an interactive login.',
+      );
     } else {
       result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, '');
     }

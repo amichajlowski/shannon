@@ -247,7 +247,9 @@ async function readAndAdoptAuthState(
     return err(
       new PentestError(
         `--auth-state file not found or unreadable inside the worker: ${authStatePath}. ` +
-          'Confirm the host path exists and that the file was mounted into the container.',
+          'Confirm the host path exists and is readable. The worker runs as a non-root user, so a file with ' +
+          'restrictive permissions (e.g. chmod 600) owned by a different host user may be unreadable once mounted — ' +
+          'make it readable by the mounting user, or relax its permissions.',
         'config',
         false,
         { authStatePath },
@@ -289,7 +291,9 @@ async function readAndAdoptAuthState(
   }
 
   try {
-    await writeFile(stateFile, contents, 'utf8');
+    // 0o600: the file holds live session cookies/tokens. stateFile was rm'd by the
+    // caller, so this is a fresh create and the mode is applied.
+    await writeFile(stateFile, contents, { encoding: 'utf8', mode: 0o600 });
   } catch (writeErr) {
     const detail = writeErr instanceof Error ? writeErr.message : String(writeErr);
     return err(

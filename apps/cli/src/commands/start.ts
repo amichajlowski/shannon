@@ -45,6 +45,8 @@ export async function start(args: StartArgs): Promise<void> {
 
   // A pre-authenticated session is only usable when the config defines an
   // authentication block (login_url + success_condition) for agents to verify against.
+  // This host-side check is intentionally shallow (the CLI doesn't parse YAML); the worker
+  // preflight enforces that the config actually contains an authentication block.
   if (args.authState && !config) {
     console.error('ERROR: --auth-state requires a config (-c) with an authentication block.');
     console.error('  The config supplies the login_url and success_condition agents use to verify the session.');

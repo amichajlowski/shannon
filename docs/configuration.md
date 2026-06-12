@@ -180,6 +180,7 @@ Shannon Lite mounts the file read-only, skips the interactive login preflight, a
 - **Treat `auth-state.json` as a secret.** It carries live session cookies and tokens, equivalent to being logged in. Store it like a credential and delete it after the scan. Shannon Lite removes its in-workspace copy when the workflow ends.
 - **The session must be fresh.** Shannon Lite does not (and cannot) re-login in this mode — there are no credentials to fall back on. If the session expires mid-scan, downstream agents lose authentication. Capture the session immediately before starting, and prefer targets with long-lived sessions.
 - **`--auth-state` requires `-c` with an `authentication` block.** Without it, agents have nothing to verify the session against and the run fails fast.
+- **`--auth-state` takes precedence over `credentials`.** If the config also contains a `credentials` block, the supplied session is used and the interactive login is skipped; the credentials remain available to agents only as a fallback for stale-session re-login.
 - The file is validated on the host before the container starts: it must be valid JSON and contain at least one cookie or origin.
 
 ## Adaptive Thinking

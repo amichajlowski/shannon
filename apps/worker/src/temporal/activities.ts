@@ -486,6 +486,7 @@ export async function runPreflightValidation(input: ActivityInput): Promise<void
       input.skipGitCheck,
       input.apiKey,
       input.providerConfig,
+      input.authStatePath,
     );
 
     if (isErr(result)) {

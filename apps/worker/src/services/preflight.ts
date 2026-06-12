@@ -634,6 +634,7 @@ export async function runPreflightChecks(
   skipGitCheck?: boolean,
   apiKey?: string,
   providerConfig?: import('../types/config.js').ProviderConfig,
+  authStatePath?: string,
 ): Promise<Result<void, PentestError>> {
   // 1. Repository check (free — filesystem only)
   const repoResult = await validateRepo(repoPath, logger, skipGitCheck);
@@ -649,6 +650,23 @@ export async function runPreflightChecks(
       return configResult;
     }
     parsedConfig = configResult.value;
+  }
+
+  // 2b. Authentication must be actionable. The schema no longer requires
+  // `credentials` (it is omitted in --auth-state mode), so enforce here that an
+  // authentication block has either credentials or a supplied session. Catches
+  // a missing-credentials config at the cheapest stage instead of mid-pipeline.
+  if (parsedConfig?.authentication && !parsedConfig.authentication.credentials && !authStatePath) {
+    return err(
+      new PentestError(
+        'Configuration has an authentication block but no credentials, and no --auth-state session was supplied. ' +
+          'Add credentials to the config, or pass a pre-authenticated session with --auth-state <file>.',
+        'config',
+        false,
+        {},
+        ErrorCode.CONFIG_VALIDATION_FAILED,
+      ),
+    );
   }
 
   // 3. code_path rules must match real entries in the repo (filesystem only).
