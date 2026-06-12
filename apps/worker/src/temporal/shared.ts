@@ -31,6 +31,7 @@ export interface PipelineInput {
   providerConfig?: ProviderConfig; // LLM provider configuration (Bedrock, Vertex, etc.)
   vulnClasses?: VulnClass[]; // omitted = all five
   exploit?: boolean; // false skips the exploitation phase
+  authStatePath?: string; // Pre-authenticated Playwright storage-state file; injected instead of an interactive login
 }
 
 export interface ResumeState {

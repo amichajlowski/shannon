@@ -57,7 +57,12 @@ export interface Credentials {
 export interface Authentication {
   login_type: LoginType;
   login_url: string;
-  credentials: Credentials;
+  /**
+   * Login credentials. Optional: omit when supplying a pre-authenticated
+   * browser session via `--auth-state`, where Shannon never performs the login
+   * itself and therefore needs no credentials.
+   */
+  credentials?: Credentials;
   login_flow?: string[];
   success_condition: SuccessCondition;
 }

@@ -131,6 +131,57 @@ login_flow:
   - "Click <exact button text>"
 ```
 
+## Pre-Authenticated Sessions (No Stored Credentials)
+
+If you cannot store login credentials in a config file — for example, a Google SSO account, or a security policy that forbids plaintext credentials on disk — you can log in yourself in a real browser and hand Shannon Lite the resulting session instead. Shannon Lite never sees your username or password; it reuses the cookies and tokens your browser already obtained.
+
+This is driven by the `--auth-state <file>` flag (short form `-a`), which accepts a [Playwright `storageState`](https://playwright.dev/docs/auth) JSON export (cookies + origin local/session storage).
+
+### 1. Capture the session interactively
+
+Use Playwright's built-in recorder to open a browser, log in by hand (including SSO, MFA, and consent screens), and save the session on exit:
+
+```bash
+npx playwright codegen --save-storage=auth-state.json https://your-app.com/login
+```
+
+Log in fully, confirm you land on an authenticated page, then close the browser window. Playwright writes `auth-state.json` containing the authenticated cookies and storage. No credentials are written — only the session.
+
+### 2. Provide an authentication block
+
+`--auth-state` still requires an `authentication` block in your config so the agents know which URL to verify against and how to detect a valid session. Credentials are **not** required in this mode — omit them entirely:
+
+```yaml
+authentication:
+  login_type: sso
+  login_url: "https://your-app.com/login"
+  # No credentials block — the session is supplied via --auth-state.
+  success_condition:
+    type: url_contains
+    value: "/dashboard"
+```
+
+### 3. Run with the captured session
+
+```bash
+npx @keygraph/shannon start -u https://your-app.com -r /path/to/repo -c ./my-config.yaml -a ./auth-state.json
+```
+
+Source-build equivalent:
+
+```bash
+./shannon start -u https://your-app.com -r /path/to/repo -c ./my-config.yaml -a ./auth-state.json
+```
+
+Shannon Lite mounts the file read-only, skips the interactive login preflight, and adopts your session as the shared authenticated state for every downstream agent.
+
+### Notes and limitations
+
+- **Treat `auth-state.json` as a secret.** It carries live session cookies and tokens, equivalent to being logged in. Store it like a credential and delete it after the scan. Shannon Lite removes its in-workspace copy when the workflow ends.
+- **The session must be fresh.** Shannon Lite does not (and cannot) re-login in this mode — there are no credentials to fall back on. If the session expires mid-scan, downstream agents lose authentication. Capture the session immediately before starting, and prefer targets with long-lived sessions.
+- **`--auth-state` requires `-c` with an `authentication` block.** Without it, agents have nothing to verify the session against and the run fails fast.
+- The file is validated on the host before the container starts: it must be valid JSON and contain at least one cookie or origin.
+
 ## Adaptive Thinking
 
 Claude decides when and how deeply to reason on Opus 4.6, 4.7, and 4.8. This is enabled by default whenever a tier resolves to one of these models.

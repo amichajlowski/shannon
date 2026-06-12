@@ -78,6 +78,7 @@ export interface ActivityInput {
   sastSarifPath?: string;
   skipGitCheck?: boolean;
   providerConfig?: ProviderConfig;
+  authStatePath?: string;
 }
 
 /**
@@ -555,7 +556,11 @@ export async function runAuthenticationValidation(input: ActivityInput): Promise
     }
 
     const distributedConfig = configResult.value;
-    if (!distributedConfig?.authentication) {
+    // Skip only when there's nothing to do: no auth block AND no supplied session.
+    // When --auth-state is set without an auth block, fall through so
+    // validateAuthentication surfaces the misconfiguration instead of silently
+    // running unauthenticated.
+    if (!distributedConfig?.authentication && !input.authStatePath) {
       logger.info('No authentication configured — skipping credential validation');
       return;
     }
@@ -575,6 +580,7 @@ export async function runAuthenticationValidation(input: ActivityInput): Promise
       ...(input.deliverablesSubdir !== undefined && { deliverablesSubdir: input.deliverablesSubdir }),
       ...(input.promptDir !== undefined && { promptDir: input.promptDir }),
       ...(input.pipelineTestingMode !== undefined && { pipelineTestingMode: input.pipelineTestingMode }),
+      ...(input.authStatePath !== undefined && { authStatePath: input.authStatePath }),
     });
 
     if (isErr(result)) {

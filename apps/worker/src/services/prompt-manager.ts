@@ -253,11 +253,15 @@ function buildAuthContext(config: DistributedConfig | null): string {
   }
 
   const auth = config.authentication;
-  const lines = [
-    `- Login type: ${auth.login_type.toUpperCase()}`,
-    `- Username: ${auth.credentials.username}`,
-    `- Login URL: ${auth.login_url}`,
-  ];
+  const lines = [`- Login type: ${auth.login_type.toUpperCase()}`];
+
+  if (auth.credentials?.username) {
+    lines.push(`- Username: ${auth.credentials.username}`);
+  } else {
+    lines.push('- Session: pre-authenticated browser session supplied (no credentials)');
+  }
+
+  lines.push(`- Login URL: ${auth.login_url}`);
 
   if (auth.credentials?.totp_secret) {
     lines.push('- MFA: TOTP enabled');

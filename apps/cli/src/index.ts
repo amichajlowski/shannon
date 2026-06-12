@@ -87,14 +87,21 @@ Options for 'start':
   -c, --config <path>       Configuration file (YAML)
   -o, --output <path>       Copy deliverables to this directory after run
   -w, --workspace <name>    Named workspace (auto-resumes if exists)
+  -a, --auth-state <path>   Pre-authenticated Playwright session (skips login;
+                            requires an 'authentication' block in the config)
       --pipeline-testing    Use minimal prompts for fast testing
       --debug               Preserve worker container after exit for log inspection
 
 Examples:
   ${prefix} start -u https://example.com -r ${mode === 'local' ? 'my-repo' : './my-repo'}
   ${prefix} start -u https://example.com -r /path/to/repo -c config.yaml -w q1-audit
+  ${prefix} start -u https://example.com -r /path/to/repo -c config.yaml -a auth-state.json
   ${prefix} logs q1-audit
   ${prefix} stop --clean
+
+Pre-authenticated sessions (e.g. Google SSO) — log in yourself, no stored credentials:
+  npx playwright codegen --save-storage=auth-state.json https://example.com/login
+  ${prefix} start -u https://example.com -r /path/to/repo -c config.yaml -a auth-state.json
 ${
   mode === 'local'
     ? `
@@ -112,6 +119,7 @@ interface ParsedStartArgs {
   config?: string;
   workspace?: string;
   output?: string;
+  authState?: string;
   pipelineTesting: boolean;
   debug: boolean;
 }
@@ -122,6 +130,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
   let config: string | undefined;
   let workspace: string | undefined;
   let output: string | undefined;
+  let authState: string | undefined;
   let pipelineTesting = false;
   let debug = false;
 
@@ -165,6 +174,13 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
           i++;
         }
         break;
+      case '-a':
+      case '--auth-state':
+        if (next && !next.startsWith('-')) {
+          authState = next;
+          i++;
+        }
+        break;
       case '--pipeline-testing':
         pipelineTesting = true;
         break;
@@ -192,6 +208,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
     ...(config && { config }),
     ...(workspace && { workspace }),
     ...(output && { output }),
+    ...(authState && { authState }),
   };
 }
 

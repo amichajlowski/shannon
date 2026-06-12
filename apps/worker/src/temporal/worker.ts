@@ -21,6 +21,7 @@
  *   --config <path>        Configuration file path
  *   --output <path>        Output directory for workspaces
  *   --workspace <name>     Resume from existing workspace
+ *   --auth-state <path>    Pre-authenticated Playwright storage-state file
  *   --pipeline-testing     Use minimal prompts for fast testing
  *
  * Environment:
@@ -57,6 +58,7 @@ interface CliArgs {
   outputPath?: string;
   pipelineTestingMode: boolean;
   resumeFromWorkspace?: string;
+  authStatePath?: string;
 }
 
 function showUsage(): void {
@@ -68,6 +70,7 @@ function showUsage(): void {
   console.log('  --task-queue <name>    Task queue name (required)');
   console.log('  --config <path>        Configuration file path');
   console.log('  --workspace <name>     Resume from existing workspace');
+  console.log('  --auth-state <path>    Pre-authenticated Playwright storage-state file');
   console.log('  --pipeline-testing     Use minimal prompts for fast testing\n');
 }
 
@@ -84,6 +87,7 @@ function parseCliArgs(argv: string[]): CliArgs {
   let outputPath: string | undefined;
   let pipelineTestingMode = false;
   let resumeFromWorkspace: string | undefined;
+  let authStatePath: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -109,6 +113,12 @@ function parseCliArgs(argv: string[]): CliArgs {
       const nextArg = argv[i + 1];
       if (nextArg && !nextArg.startsWith('-')) {
         resumeFromWorkspace = nextArg;
+        i++;
+      }
+    } else if (arg === '--auth-state') {
+      const nextArg = argv[i + 1];
+      if (nextArg && !nextArg.startsWith('-')) {
+        authStatePath = nextArg;
         i++;
       }
     } else if (arg === '--pipeline-testing') {
@@ -142,6 +152,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     ...(configPath && { configPath }),
     ...(outputPath && { outputPath }),
     ...(resumeFromWorkspace && { resumeFromWorkspace }),
+    ...(authStatePath && { authStatePath }),
   };
 }
 
@@ -318,6 +329,7 @@ function buildPipelineInput(
     ...(args.pipelineTestingMode && { pipelineTestingMode: args.pipelineTestingMode }),
     ...(workspace.isResume && args.resumeFromWorkspace && { resumeFromWorkspace: args.resumeFromWorkspace }),
     ...(workspace.terminatedWorkflows.length > 0 && { terminatedWorkflows: workspace.terminatedWorkflows }),
+    ...(args.authStatePath && { authStatePath: args.authStatePath }),
     ...(Object.keys(orchestration.pipelineConfig).length > 0 && { pipelineConfig: orchestration.pipelineConfig }),
     ...(orchestration.vulnClasses && { vulnClasses: orchestration.vulnClasses }),
     ...(orchestration.exploit !== undefined && { exploit: orchestration.exploit }),

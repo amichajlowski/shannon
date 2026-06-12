@@ -12,7 +12,7 @@
  * pipeline burns hours on broken auth.
  */
 
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import type { JsonSchemaOutputFormat } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { runClaudePrompt } from '../ai/claude-executor.js';
@@ -57,7 +57,7 @@ const VALIDATION_SCHEMA: JsonSchemaOutputFormat = {
 const AGENT_NAME = 'validate-authentication';
 
 export interface ValidateAuthInput {
-  readonly distributedConfig: DistributedConfig;
+  readonly distributedConfig: DistributedConfig | null;
   readonly repoPath: string;
   readonly webUrl: string;
   readonly logger: ActivityLogger;
@@ -68,6 +68,12 @@ export interface ValidateAuthInput {
   readonly deliverablesSubdir?: string;
   readonly promptDir?: string;
   readonly pipelineTestingMode?: boolean;
+  /**
+   * Path to a pre-authenticated Playwright storage-state JSON. When set, the
+   * preflight skips the interactive login entirely and injects this session as
+   * the shared auth state for downstream agents.
+   */
+  readonly authStatePath?: string;
 }
 
 export async function validateAuthentication(input: ValidateAuthInput): Promise<Result<void, PentestError>> {
@@ -83,20 +89,63 @@ export async function validateAuthentication(input: ValidateAuthInput): Promise<
     deliverablesSubdir,
     promptDir,
     pipelineTestingMode,
+    authStatePath,
   } = input;
 
-  const authentication = distributedConfig.authentication;
+  const authentication = distributedConfig?.authentication ?? null;
   if (!authentication) {
+    // A supplied auth-state file is meaningless without an authentication block:
+    // downstream agents only restore/verify the session when authentication is configured.
+    if (authStatePath) {
+      return err(
+        new PentestError(
+          "--auth-state requires an 'authentication' block in your config (at least login_url and " +
+            'success_condition) so agents can restore and verify the supplied session.',
+          'config',
+          false,
+          { authStatePath },
+          ErrorCode.CONFIG_VALIDATION_FAILED,
+        ),
+      );
+    }
     return ok(undefined);
+  }
+
+  const stateFile = authStateFile(auditSession.sessionMetadata);
+  await rm(stateFile, { force: true });
+
+  // === Pre-authenticated session injection ===
+  // The operator logged in via their own browser and exported the storage state.
+  // Inject it as the shared auth state and skip the interactive login (no LLM, no credentials).
+  if (authStatePath) {
+    return injectProvidedAuthState({
+      authStatePath,
+      stateFile,
+      logger,
+      auditSession,
+      attemptNumber,
+      loginUrl: authentication.login_url,
+    });
+  }
+
+  // === Credential-driven login validation ===
+  if (!authentication.credentials) {
+    return err(
+      new PentestError(
+        'Authentication is configured but has no credentials and no --auth-state was provided. ' +
+          'Add credentials to the config, or supply a pre-authenticated session with --auth-state <file>.',
+        'config',
+        false,
+        { loginUrl: authentication.login_url },
+        ErrorCode.CONFIG_VALIDATION_FAILED,
+      ),
+    );
   }
 
   logger.info('Validating authentication credentials with live browser...', {
     loginUrl: authentication.login_url,
     loginType: authentication.login_type,
   });
-
-  const stateFile = authStateFile(auditSession.sessionMetadata);
-  await rm(stateFile, { force: true });
 
   const prompt = await loadPrompt(
     AGENT_NAME,
@@ -145,6 +194,117 @@ export async function validateAuthentication(input: ValidateAuthInput): Promise<
   await auditSession.endAgent(AGENT_NAME, endResult);
 
   return classification;
+}
+
+interface InjectAuthStateInput {
+  readonly authStatePath: string;
+  readonly stateFile: string;
+  readonly logger: ActivityLogger;
+  readonly auditSession: AuditSession;
+  readonly attemptNumber: number;
+  readonly loginUrl: string;
+}
+
+/**
+ * Install an operator-supplied Playwright storage-state file as the shared auth
+ * state. Validates that it parses and carries cookies or origins before
+ * adopting it, then writes it to the path downstream agents restore from. No
+ * browser, no LLM, no credentials.
+ */
+async function injectProvidedAuthState(input: InjectAuthStateInput): Promise<Result<void, PentestError>> {
+  const { authStatePath, stateFile, logger, auditSession, attemptNumber, loginUrl } = input;
+
+  logger.info('Injecting pre-authenticated browser session (skipping interactive login)...', {
+    authStatePath,
+    loginUrl,
+  });
+
+  await auditSession.startAgent(AGENT_NAME, `Inject pre-authenticated session from ${authStatePath}`, attemptNumber);
+  const startTime = Date.now();
+
+  const result = await readAndAdoptAuthState(authStatePath, stateFile, logger);
+
+  await auditSession.endAgent(AGENT_NAME, {
+    attemptNumber,
+    duration_ms: Date.now() - startTime,
+    cost_usd: 0,
+    success: result.ok,
+    ...(!result.ok && { error: result.error.message }),
+  });
+
+  return result;
+}
+
+async function readAndAdoptAuthState(
+  authStatePath: string,
+  stateFile: string,
+  logger: ActivityLogger,
+): Promise<Result<void, PentestError>> {
+  let contents: string;
+  try {
+    contents = await readFile(authStatePath, 'utf8');
+  } catch {
+    return err(
+      new PentestError(
+        `--auth-state file not found or unreadable inside the worker: ${authStatePath}. ` +
+          'Confirm the host path exists and that the file was mounted into the container.',
+        'config',
+        false,
+        { authStatePath },
+        ErrorCode.CONFIG_VALIDATION_FAILED,
+      ),
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch (parseErr) {
+    const detail = parseErr instanceof Error ? parseErr.message : String(parseErr);
+    return err(
+      new PentestError(
+        `--auth-state file is not valid JSON (${authStatePath}): ${detail}. ` +
+          'It must be a Playwright storageState export (e.g. from `playwright codegen --save-storage`).',
+        'config',
+        false,
+        { authStatePath, parseError: detail },
+        ErrorCode.CONFIG_VALIDATION_FAILED,
+      ),
+    );
+  }
+
+  const cookieCount = countStorageEntries(parsed, 'cookies');
+  const originCount = countStorageEntries(parsed, 'origins');
+  if (cookieCount === 0 && originCount === 0) {
+    return err(
+      new PentestError(
+        `--auth-state file ${authStatePath} contains no cookies or origins — it does not hold a logged-in ` +
+          'session. Re-export it after logging in (e.g. `playwright codegen --save-storage=state.json <login-url>`).',
+        'config',
+        false,
+        { authStatePath, cookieCount, originCount },
+        ErrorCode.CONFIG_VALIDATION_FAILED,
+      ),
+    );
+  }
+
+  try {
+    await writeFile(stateFile, contents, 'utf8');
+  } catch (writeErr) {
+    const detail = writeErr instanceof Error ? writeErr.message : String(writeErr);
+    return err(
+      new PentestError(
+        `Failed to install the supplied auth-state into ${stateFile}: ${detail}`,
+        'filesystem',
+        true,
+        { authStatePath, stateFile, writeError: detail },
+        ErrorCode.AGENT_EXECUTION_FAILED,
+      ),
+    );
+  }
+
+  logger.info('Pre-authenticated session adopted', { stateFile, cookieCount, originCount });
+  return ok(undefined);
 }
 
 async function verifySavedAuthState(stateFile: string, logger: ActivityLogger): Promise<Result<void, PentestError>> {

@@ -244,6 +244,7 @@ export async function pentestPipeline(input: PipelineInput): Promise<PipelineSta
     ...(input.sastSarifPath !== undefined && { sastSarifPath: input.sastSarifPath }),
     ...(input.skipGitCheck !== undefined && { skipGitCheck: input.skipGitCheck }),
     ...(input.providerConfig !== undefined && { providerConfig: input.providerConfig }),
+    ...(input.authStatePath !== undefined && { authStatePath: input.authStatePath }),
   };
 
   const selectedVulnClasses: readonly VulnClass[] =

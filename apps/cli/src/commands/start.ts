@@ -12,7 +12,7 @@ import { ensureImage, ensureInfra, randomSuffix, spawnWorker } from '../docker.j
 import { buildEnvFlags, loadEnv, validateCredentials } from '../env.js';
 import { getCredentialsPath, getWorkspacesDir, initHome } from '../home.js';
 import { isLocal } from '../mode.js';
-import { resolveConfig, resolveRepo } from '../paths.js';
+import { resolveAuthState, resolveConfig, resolveRepo } from '../paths.js';
 import { displaySplash } from '../splash.js';
 
 export interface StartArgs {
@@ -21,6 +21,7 @@ export interface StartArgs {
   config?: string;
   workspace?: string;
   output?: string;
+  authState?: string;
   pipelineTesting: boolean;
   debug: boolean;
   version: string;
@@ -41,6 +42,15 @@ export async function start(args: StartArgs): Promise<void> {
   // 3. Resolve paths
   const repo = resolveRepo(args.repo);
   const config = args.config ? resolveConfig(args.config) : undefined;
+
+  // A pre-authenticated session is only usable when the config defines an
+  // authentication block (login_url + success_condition) for agents to verify against.
+  if (args.authState && !config) {
+    console.error('ERROR: --auth-state requires a config (-c) with an authentication block.');
+    console.error('  The config supplies the login_url and success_condition agents use to verify the session.');
+    process.exit(1);
+  }
+  const authState = args.authState ? resolveAuthState(args.authState) : undefined;
 
   // 4. Ensure workspaces dir is writable by container user (UID 1001)
   const workspacesDir = getWorkspacesDir();
@@ -107,6 +117,7 @@ export async function start(args: StartArgs): Promise<void> {
     containerName,
     envFlags: buildEnvFlags(),
     ...(config && { config }),
+    ...(authState && { authState }),
     ...(hasCredentials && { credentials: credentialsPath }),
     ...(promptsDir && { promptsDir }),
     ...(outputDir && { outputDir }),
@@ -231,6 +242,9 @@ function printInfo(
   console.log(`  Workspace:  ${workspace}`);
   if (args.config) {
     console.log(`  Config:     ${path.resolve(args.config)}`);
+  }
+  if (args.authState) {
+    console.log(`  Auth state: ${path.resolve(args.authState)} (pre-authenticated session)`);
   }
   if (args.pipelineTesting) {
     console.log('  Mode:       Pipeline Testing');

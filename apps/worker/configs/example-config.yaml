@@ -28,6 +28,11 @@ description: "Next.js e-commerce app on PostgreSQL. Local dev environment — .e
 authentication:
   login_type: form  # Options: 'form' or 'sso'
   login_url: "https://example.com/login"
+  # The `credentials` block is OPTIONAL. Omit it when supplying a pre-authenticated
+  # browser session via the CLI flag `--auth-state <file>` (e.g. for Google SSO or
+  # policies that forbid storing credentials). See docs/configuration.md →
+  # "Pre-Authenticated Sessions". When omitted, only login_type, login_url, and
+  # success_condition are needed.
   credentials:
     username: "testuser"
     password: "testpassword"

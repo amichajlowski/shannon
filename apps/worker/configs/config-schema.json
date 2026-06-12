@@ -21,7 +21,7 @@
         },
         "credentials": {
           "type": "object",
-          "description": "Login credentials",
+          "description": "Login credentials. Optional — omit when supplying a pre-authenticated browser session via the --auth-state CLI flag.",
           "properties": {
             "username": {
               "type": "string",
@@ -99,7 +99,7 @@
           "additionalProperties": false
         }
       },
-      "required": ["login_type", "login_url", "credentials", "success_condition"],
+      "required": ["login_type", "login_url", "success_condition"],
       "additionalProperties": false
     },
     "pipeline": {

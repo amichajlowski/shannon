@@ -14,6 +14,7 @@ import {
   ALL_VULN_CLASSES,
   type Authentication,
   type Config,
+  type Credentials,
   type DistributedConfig,
   type Rule,
 } from './types/config.js';
@@ -694,24 +695,28 @@ export const distributeConfig = (config: Config | null): DistributedConfig => {
   };
 };
 
+const sanitizeCredentials = (credentials: NonNullable<Authentication['credentials']>): Credentials => {
+  return {
+    username: credentials.username.trim(),
+    ...(credentials.password && { password: credentials.password }),
+    ...(credentials.totp_secret && { totp_secret: credentials.totp_secret.trim() }),
+    ...(credentials.email_login && {
+      email_login: {
+        address: credentials.email_login.address.trim(),
+        password: credentials.email_login.password,
+        ...(credentials.email_login.totp_secret && {
+          totp_secret: credentials.email_login.totp_secret.trim(),
+        }),
+      },
+    }),
+  };
+};
+
 const sanitizeAuthentication = (auth: Authentication): Authentication => {
   return {
     login_type: auth.login_type.toLowerCase().trim() as Authentication['login_type'],
     login_url: auth.login_url.trim(),
-    credentials: {
-      username: auth.credentials.username.trim(),
-      ...(auth.credentials.password && { password: auth.credentials.password }),
-      ...(auth.credentials.totp_secret && { totp_secret: auth.credentials.totp_secret.trim() }),
-      ...(auth.credentials.email_login && {
-        email_login: {
-          address: auth.credentials.email_login.address.trim(),
-          password: auth.credentials.email_login.password,
-          ...(auth.credentials.email_login.totp_secret && {
-            totp_secret: auth.credentials.email_login.totp_secret.trim(),
-          }),
-        },
-      }),
-    },
+    ...(auth.credentials && { credentials: sanitizeCredentials(auth.credentials) }),
     ...(auth.login_flow && { login_flow: auth.login_flow.map((step) => step.trim()) }),
     success_condition: {
       type: auth.success_condition.type.toLowerCase().trim() as Authentication['success_condition']['type'],
