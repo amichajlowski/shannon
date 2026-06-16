@@ -25,6 +25,7 @@ import { ErrorCode } from '../types/errors.js';
 import { err, ok, type Result } from '../types/result.js';
 import { PentestError } from './error-handling.js';
 import { loadPrompt } from './prompt-manager.js';
+import { isLiveVerificationDisabled, verifyInjectedSessionLive } from './verify-injected-session.js';
 
 const FAILURE_POINTS = ['username_or_password', 'totp_secret', 'out_of_band'] as const;
 type AuthFailurePoint = (typeof FAILURE_POINTS)[number];
@@ -124,7 +125,8 @@ export async function validateAuthentication(input: ValidateAuthInput): Promise<
       logger,
       auditSession,
       attemptNumber,
-      loginUrl: authentication.login_url,
+      authentication,
+      sourceDir: repoPath,
     });
   }
 
@@ -202,17 +204,24 @@ interface InjectAuthStateInput {
   readonly logger: ActivityLogger;
   readonly auditSession: AuditSession;
   readonly attemptNumber: number;
-  readonly loginUrl: string;
+  readonly authentication: NonNullable<DistributedConfig['authentication']>;
+  readonly sourceDir: string;
 }
 
 /**
  * Install an operator-supplied Playwright storage-state file as the shared auth
- * state. Validates that it parses and carries cookies or origins before
- * adopting it, then writes it to the path downstream agents restore from. No
- * browser, no LLM, no credentials.
+ * state, then confirm it actually authenticates against the live target.
+ *
+ * Structural validation (parses, carries cookies/origins) catches a junk file
+ * cheaply, but only a live check catches the common case of an expired or
+ * wrong-domain session. The live check restores the state in a real browser and
+ * evaluates the configured success_condition; it can be disabled via
+ * SHANNON_SKIP_AUTH_STATE_VERIFY for environments where the browser is
+ * unavailable. No LLM, no credentials.
  */
 async function injectProvidedAuthState(input: InjectAuthStateInput): Promise<Result<void, PentestError>> {
-  const { authStatePath, stateFile, logger, auditSession, attemptNumber, loginUrl } = input;
+  const { authStatePath, stateFile, logger, auditSession, attemptNumber, authentication, sourceDir } = input;
+  const loginUrl = authentication.login_url;
 
   logger.info('Injecting pre-authenticated browser session (skipping interactive login)...', {
     authStatePath,
@@ -222,7 +231,7 @@ async function injectProvidedAuthState(input: InjectAuthStateInput): Promise<Res
   await auditSession.startAgent(AGENT_NAME, `Inject pre-authenticated session from ${authStatePath}`, attemptNumber);
   const startTime = Date.now();
 
-  const result = await readAndAdoptAuthState(authStatePath, stateFile, logger);
+  const result = await adoptAndVerifyAuthState({ authStatePath, stateFile, authentication, sourceDir, logger });
 
   await auditSession.endAgent(AGENT_NAME, {
     attemptNumber,
@@ -233,6 +242,45 @@ async function injectProvidedAuthState(input: InjectAuthStateInput): Promise<Res
   });
 
   return result;
+}
+
+interface AdoptAndVerifyInput {
+  readonly authStatePath: string;
+  readonly stateFile: string;
+  readonly authentication: NonNullable<DistributedConfig['authentication']>;
+  readonly sourceDir: string;
+  readonly logger: ActivityLogger;
+}
+
+/**
+ * Adopt the supplied storage state, then verify it live unless verification is
+ * disabled. Adoption must succeed before verification — the live check restores
+ * from the written stateFile.
+ */
+async function adoptAndVerifyAuthState(input: AdoptAndVerifyInput): Promise<Result<void, PentestError>> {
+  const { authStatePath, stateFile, authentication, sourceDir, logger } = input;
+
+  const adopted = await readAndAdoptAuthState(authStatePath, stateFile, logger);
+  if (!adopted.ok) {
+    return adopted;
+  }
+
+  if (isLiveVerificationDisabled()) {
+    logger.warn(
+      'Live session verification disabled (SHANNON_SKIP_AUTH_STATE_VERIFY) — adopting the supplied session ' +
+        'without confirming it authenticates against the target.',
+      { stateFile, loginUrl: authentication.login_url },
+    );
+    return ok(undefined);
+  }
+
+  return verifyInjectedSessionLive({
+    stateFile,
+    loginUrl: authentication.login_url,
+    successCondition: authentication.success_condition,
+    sourceDir,
+    logger,
+  });
 }
 
 async function readAndAdoptAuthState(

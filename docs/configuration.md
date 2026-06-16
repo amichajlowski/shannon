@@ -175,13 +175,22 @@ Source-build equivalent:
 
 Shannon Lite mounts the file read-only, skips the interactive login preflight, and adopts your session as the shared authenticated state for every downstream agent.
 
+### Verification
+
+The session is checked at two points before the pipeline commits to expensive work:
+
+1. **On the host, before the container starts** — the file must be valid JSON and contain at least one cookie or origin. A junk file fails immediately.
+2. **Live, in the preflight** — Shannon Lite restores the session in a real browser, navigates to your `login_url`, and evaluates your `success_condition`. If the session does not actually authenticate against the target (expired, wrong domain, or a `success_condition` that does not match an authenticated page), the run **fails fast** with a clear message instead of burning hours before the failure surfaces downstream.
+
+If the live check is unreliable in your environment (e.g. no browser available), set `SHANNON_SKIP_AUTH_STATE_VERIFY=1` to fall back to host-side structural validation only. The supplied session is then adopted unverified.
+
 ### Notes and limitations
 
 - **Treat `auth-state.json` as a secret.** It carries live session cookies and tokens, equivalent to being logged in. Store it like a credential and delete it after the scan. Shannon Lite removes its in-workspace copy when the workflow ends.
-- **The session must be fresh.** Shannon Lite does not (and cannot) re-login in this mode — there are no credentials to fall back on. If the session expires mid-scan, downstream agents lose authentication. Capture the session immediately before starting, and prefer targets with long-lived sessions.
+- **The session must be fresh.** Shannon Lite does not (and cannot) re-login in this mode — there are no credentials to fall back on. If the session expires mid-scan, downstream agents lose authentication. Capture the session immediately before starting, and prefer targets with long-lived sessions. The preflight verifies the session is valid *at the start* of the run; it cannot prevent expiry partway through.
 - **`--auth-state` requires `-c` with an `authentication` block.** Without it, agents have nothing to verify the session against and the run fails fast.
-- **`--auth-state` takes precedence over `credentials`.** If the config also contains a `credentials` block, the supplied session is used and the interactive login is skipped; the credentials remain available to agents only as a fallback for stale-session re-login.
-- The file is validated on the host before the container starts: it must be valid JSON and contain at least one cookie or origin.
+- **`--auth-state` takes precedence over `credentials`.** If the config also contains a `credentials` block, the supplied session is injected and the interactive login preflight is skipped. Stale-session re-login by downstream agents only works if the config also defines a `login_flow` — that is what carries the credentials into the agent's login steps. With credentials but no `login_flow`, agents cannot re-login and will stop if the session goes stale.
+- **Auth-class coverage is reduced.** The `vuln-auth` and `exploit-auth` agents test login and session-management flows, which normally require exercising the real login. In `--auth-state` mode (no credentials) they restore the supplied session but cannot drive an interactive login, so authentication-class testing is limited to what the supplied session already reaches.
 
 ## Adaptive Thinking
 
