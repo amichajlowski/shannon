@@ -245,6 +245,7 @@ export async function pentestPipeline(input: PipelineInput): Promise<PipelineSta
     ...(input.skipGitCheck !== undefined && { skipGitCheck: input.skipGitCheck }),
     ...(input.providerConfig !== undefined && { providerConfig: input.providerConfig }),
     ...(input.authStatePath !== undefined && { authStatePath: input.authStatePath }),
+    ...(input.authHeaderFile !== undefined && { authHeaderFile: input.authHeaderFile }),
   };
 
   const selectedVulnClasses: readonly VulnClass[] =
@@ -442,6 +443,15 @@ export async function pentestPipeline(input: PipelineInput): Promise<PipelineSta
     // Write the playwright-cli config before any browser session opens so the
     // validator and downstream agents inherit anti-detection defaults.
     await preflightActs.syncPlaywrightStealthConfig(activityInput);
+
+    // === Auth header verification ===
+    // When --auth-header-file is supplied, confirm the injected header is
+    // accepted by the target before committing to the pipeline. No-op otherwise.
+    if (input.authHeaderFile) {
+      state.currentPhase = 'auth-validation';
+      await authValidationActs.verifyAuthHeader(activityInput);
+      log.info('Auth header verification passed');
+    }
 
     // === Authentication Validation ===
     state.currentPhase = 'auth-validation';

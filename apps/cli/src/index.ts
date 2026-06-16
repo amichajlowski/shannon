@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from './commands/build.js';
+import { captureAuth, parseCaptureAuthArgs } from './commands/capture-auth.js';
 import { logs } from './commands/logs.js';
 import { setup } from './commands/setup.js';
 import { start } from './commands/start.js';
@@ -89,8 +90,17 @@ Options for 'start':
   -w, --workspace <name>    Named workspace (auto-resumes if exists)
   -a, --auth-state <path>   Pre-authenticated Playwright session (skips login;
                             requires an 'authentication' block in the config)
+      --auth-header-file <path>  Header line (e.g. Authorization: Bearer ...) injected
+                            on every request, for Bearer/header-authenticated APIs
       --pipeline-testing    Use minimal prompts for fast testing
       --debug               Preserve worker container after exit for log inspection
+
+Options for 'capture-auth' (capture a request header for Bearer/header APIs):
+      --login-url <url>      Frontend login page to open for interactive SSO
+      --target-origin <origin>  API origin whose request header to capture (required)
+      --header-name <name>   Header to capture (default: authorization)
+  -o, --output <path>        Output file (default: ./auth-header.txt)
+      --from-har <file>      Parse a DevTools-exported HAR instead of opening a browser
 
 Examples:
   ${prefix} start -u https://example.com -r ${mode === 'local' ? 'my-repo' : './my-repo'}
@@ -102,6 +112,11 @@ Examples:
 Pre-authenticated sessions (e.g. Google SSO) — log in yourself, no stored credentials:
   npx playwright codegen --save-storage=auth-state.json https://example.com/login
   ${prefix} start -u https://example.com -r /path/to/repo -c config.yaml -a auth-state.json
+
+Bearer/header-authenticated APIs (stateless; token sent as a request header):
+  # Requires host Playwright + a browser: npx playwright install chromium
+  ${prefix} capture-auth --login-url https://app.example.com/login --target-origin https://api.example.com
+  ${prefix} start -u https://api.example.com -r /path/to/repo --auth-header-file auth-header.txt
 ${
   mode === 'local'
     ? `
@@ -120,6 +135,7 @@ interface ParsedStartArgs {
   workspace?: string;
   output?: string;
   authState?: string;
+  authHeaderFile?: string;
   pipelineTesting: boolean;
   debug: boolean;
 }
@@ -131,6 +147,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
   let workspace: string | undefined;
   let output: string | undefined;
   let authState: string | undefined;
+  let authHeaderFile: string | undefined;
   let pipelineTesting = false;
   let debug = false;
 
@@ -181,6 +198,12 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
           i++;
         }
         break;
+      case '--auth-header-file':
+        if (next && !next.startsWith('-')) {
+          authHeaderFile = next;
+          i++;
+        }
+        break;
       case '--pipeline-testing':
         pipelineTesting = true;
         break;
@@ -209,6 +232,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
     ...(workspace && { workspace }),
     ...(output && { output }),
     ...(authState && { authState }),
+    ...(authHeaderFile && { authHeaderFile }),
   };
 }
 
@@ -240,6 +264,9 @@ switch (command) {
   }
   case 'workspaces':
     workspaces(getVersion());
+    break;
+  case 'capture-auth':
+    captureAuth(parseCaptureAuthArgs(args.slice(1)));
     break;
   case 'status':
     status();

@@ -7,7 +7,9 @@
 /**
  * Writes <sourceDir>/.playwright/cli.config.json with stealth defaults so
  * `playwright-cli open` auto-loads them from the agent's cwd. Skipped when a
- * config already exists so user-provided files are never clobbered.
+ * config already exists so user-provided files are never clobbered — unless an
+ * auth header is supplied, in which case the header is merged into whatever
+ * config is present (the header is load-bearing for authenticated scans).
  *
  * NOTE: Playwright's MCP browser config treats `initScript` entries as file
  * paths, not inline source. The stealth script is written alongside the config
@@ -51,7 +53,17 @@ window.chrome.runtime = window.chrome.runtime || {
 };
 `;
 
-function buildStealthConfig(initScriptPath: string) {
+/**
+ * An operator-supplied auth header to attach to every browser request, plus the
+ * sole origin the browser may talk to so the header never leaks cross-origin.
+ */
+export interface InjectedAuthHeader {
+  readonly name: string;
+  readonly value: string;
+  readonly origin: string;
+}
+
+function buildStealthConfig(initScriptPath: string, authHeader?: InjectedAuthHeader) {
   return {
     browser: {
       browserName: 'chromium',
@@ -63,28 +75,58 @@ function buildStealthConfig(initScriptPath: string) {
       contextOptions: {
         viewport: { width: 1920, height: 1080 },
         locale: 'en-US',
-        extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' },
+        extraHTTPHeaders: {
+          'Accept-Language': 'en-US,en;q=0.9',
+          ...(authHeader && { [authHeader.name]: authHeader.value }),
+        },
         userAgent:
           'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       },
       initScript: [initScriptPath],
     },
+    // Confine the browser to the target origin so the injected credential is
+    // never sent to a third party on a cross-origin redirect or resource load.
+    ...(authHeader && { network: { allowedOrigins: [authHeader.origin] } }),
   };
 }
 
-export type StealthConfigWriteResult = 'wrote' | 'skipped-existing';
+/**
+ * Merge an auth header (and its origin allowlist) into a config object that
+ * already exists on disk, without disturbing the rest of it.
+ */
+function mergeAuthHeader(config: Record<string, unknown>, authHeader: InjectedAuthHeader): Record<string, unknown> {
+  const browser = { ...((config.browser as Record<string, unknown>) ?? {}) };
+  const contextOptions = { ...((browser.contextOptions as Record<string, unknown>) ?? {}) };
+  const extraHTTPHeaders = { ...((contextOptions.extraHTTPHeaders as Record<string, string>) ?? {}) };
+  extraHTTPHeaders[authHeader.name] = authHeader.value;
+  contextOptions.extraHTTPHeaders = extraHTTPHeaders;
+  browser.contextOptions = contextOptions;
+  return { ...config, browser, network: { allowedOrigins: [authHeader.origin] } };
+}
+
+export type StealthConfigWriteResult = 'wrote' | 'skipped-existing' | 'merged-auth-header';
 
 export async function writePlaywrightStealthConfig(
   sourceDir: string,
+  authHeader?: InjectedAuthHeader,
 ): Promise<{ result: StealthConfigWriteResult; configPath: string }> {
   const playwrightDir = path.join(sourceDir, '.playwright');
   const configPath = path.join(playwrightDir, 'cli.config.json');
+
   if (await pathExists(configPath)) {
-    return { result: 'skipped-existing', configPath };
+    // A config exists. Leave it untouched unless we must inject an auth header,
+    // which is load-bearing — then merge the header into the existing config.
+    if (!authHeader) {
+      return { result: 'skipped-existing', configPath };
+    }
+    const existing = JSON.parse(await fs.readFile(configPath, 'utf8')) as Record<string, unknown>;
+    await fs.writeFile(configPath, JSON.stringify(mergeAuthHeader(existing, authHeader), null, 2));
+    return { result: 'merged-auth-header', configPath };
   }
+
   const initScriptPath = path.join(playwrightDir, 'scripts', 'stealth.js');
   await fs.mkdir(path.dirname(initScriptPath), { recursive: true });
   await fs.writeFile(initScriptPath, STEALTH_INIT_SCRIPT);
-  await fs.writeFile(configPath, JSON.stringify(buildStealthConfig(initScriptPath), null, 2));
+  await fs.writeFile(configPath, JSON.stringify(buildStealthConfig(initScriptPath, authHeader), null, 2));
   return { result: 'wrote', configPath };
 }

@@ -12,7 +12,7 @@ import { ensureImage, ensureInfra, randomSuffix, spawnWorker } from '../docker.j
 import { buildEnvFlags, loadEnv, validateCredentials } from '../env.js';
 import { getCredentialsPath, getWorkspacesDir, initHome } from '../home.js';
 import { isLocal } from '../mode.js';
-import { resolveAuthState, resolveConfig, resolveRepo } from '../paths.js';
+import { resolveAuthHeaderFile, resolveAuthState, resolveConfig, resolveRepo } from '../paths.js';
 import { displaySplash } from '../splash.js';
 
 export interface StartArgs {
@@ -22,6 +22,7 @@ export interface StartArgs {
   workspace?: string;
   output?: string;
   authState?: string;
+  authHeaderFile?: string;
   pipelineTesting: boolean;
   debug: boolean;
   version: string;
@@ -52,7 +53,17 @@ export async function start(args: StartArgs): Promise<void> {
     console.error('  The config supplies the login_url and success_condition agents use to verify the session.');
     process.exit(1);
   }
+
+  // --auth-state (browser cookies/storage) and --auth-header-file (a request
+  // header) are different, mutually exclusive auth mechanisms.
+  if (args.authState && args.authHeaderFile) {
+    console.error('ERROR: pass either --auth-state or --auth-header-file, not both.');
+    console.error('  --auth-state is for cookie-session apps; --auth-header-file is for Bearer/header APIs.');
+    process.exit(1);
+  }
+
   const authState = args.authState ? resolveAuthState(args.authState) : undefined;
+  const authHeaderFile = args.authHeaderFile ? resolveAuthHeaderFile(args.authHeaderFile) : undefined;
 
   // 4. Ensure workspaces dir is writable by container user (UID 1001)
   const workspacesDir = getWorkspacesDir();
@@ -120,6 +131,7 @@ export async function start(args: StartArgs): Promise<void> {
     envFlags: buildEnvFlags(),
     ...(config && { config }),
     ...(authState && { authState }),
+    ...(authHeaderFile && { authHeaderFile }),
     ...(hasCredentials && { credentials: credentialsPath }),
     ...(promptsDir && { promptsDir }),
     ...(outputDir && { outputDir }),
@@ -247,6 +259,10 @@ function printInfo(
   }
   if (args.authState) {
     console.log(`  Auth state: ${path.resolve(args.authState)} (pre-authenticated session)`);
+  }
+  if (args.authHeaderFile) {
+    // Print the path only — the file holds a live token; never echo its contents.
+    console.log(`  Auth header: ${path.resolve(args.authHeaderFile)} (injected on every request)`);
   }
   if (args.pipelineTesting) {
     console.log('  Mode:       Pipeline Testing');

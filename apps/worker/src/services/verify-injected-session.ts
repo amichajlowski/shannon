@@ -142,7 +142,7 @@ export async function verifyInjectedSessionLive(
   }
 }
 
-interface CliRun {
+export interface CliRun {
   readonly stdout: string;
   readonly stderr: string;
   readonly failed: boolean;
@@ -154,7 +154,7 @@ interface CliRun {
  * interpolated into a command line). Process-level failures (non-zero exit,
  * timeout, spawn error) are captured as `failed` rather than thrown.
  */
-async function runPlaywrightCli(args: readonly string[], cwd: string, timeoutMs: number): Promise<CliRun> {
+export async function runPlaywrightCli(args: readonly string[], cwd: string, timeoutMs: number): Promise<CliRun> {
   try {
     const { stdout, stderr } = await execFileAsync('playwright-cli', [...args], {
       cwd,
@@ -197,11 +197,11 @@ interface ProbeResult {
 }
 
 /**
- * Extract the JSON object printed under the `### Result` section of
+ * Extract and JSON-parse the body printed under the `### Result` section of
  * `playwright-cli eval` output. Returns null when the section is missing or
- * unparseable (treated by the caller as an inconclusive/transient failure).
+ * unparseable (treated by callers as inconclusive/transient).
  */
-function parseProbeResult(stdout: string): ProbeResult | null {
+export function extractEvalResult(stdout: string): unknown | null {
   const marker = '### Result';
   const start = stdout.indexOf(marker);
   if (start === -1) {
@@ -213,19 +213,27 @@ function parseProbeResult(stdout: string): ProbeResult | null {
   const body = (nextSection === -1 ? afterMarker : afterMarker.slice(0, nextSection)).trim();
 
   try {
-    const parsed = JSON.parse(body) as unknown;
-    if (typeof parsed !== 'object' || parsed === null || typeof (parsed as { ok?: unknown }).ok !== 'boolean') {
-      return null;
-    }
-    const url = (parsed as { url?: unknown }).url;
-    return { ok: (parsed as { ok: boolean }).ok, ...(typeof url === 'string' && { url }) };
+    return JSON.parse(body) as unknown;
   } catch {
     return null;
   }
 }
 
+/**
+ * Interpret an eval result shaped like `{ ok: boolean, url?: string }`. Returns
+ * null when the section is missing, unparseable, or the wrong shape.
+ */
+function parseProbeResult(stdout: string): ProbeResult | null {
+  const parsed = extractEvalResult(stdout);
+  if (typeof parsed !== 'object' || parsed === null || typeof (parsed as { ok?: unknown }).ok !== 'boolean') {
+    return null;
+  }
+  const url = (parsed as { url?: unknown }).url;
+  return { ok: (parsed as { ok: boolean }).ok, ...(typeof url === 'string' && { url }) };
+}
+
 /** The daemon prints an `### Error` section when a command fails server-side. */
-function containsDaemonError(stdout: string): boolean {
+export function containsDaemonError(stdout: string): boolean {
   return /^### Error$/m.test(stdout);
 }
 

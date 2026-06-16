@@ -59,6 +59,7 @@ interface CliArgs {
   pipelineTestingMode: boolean;
   resumeFromWorkspace?: string;
   authStatePath?: string;
+  authHeaderFile?: string;
 }
 
 function showUsage(): void {
@@ -71,6 +72,7 @@ function showUsage(): void {
   console.log('  --config <path>        Configuration file path');
   console.log('  --workspace <name>     Resume from existing workspace');
   console.log('  --auth-state <path>    Pre-authenticated Playwright storage-state file');
+  console.log('  --auth-header-file <path>  Header line injected on every request (Bearer/header APIs)');
   console.log('  --pipeline-testing     Use minimal prompts for fast testing\n');
 }
 
@@ -88,6 +90,7 @@ function parseCliArgs(argv: string[]): CliArgs {
   let pipelineTestingMode = false;
   let resumeFromWorkspace: string | undefined;
   let authStatePath: string | undefined;
+  let authHeaderFile: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -119,6 +122,12 @@ function parseCliArgs(argv: string[]): CliArgs {
       const nextArg = argv[i + 1];
       if (nextArg && !nextArg.startsWith('-')) {
         authStatePath = nextArg;
+        i++;
+      }
+    } else if (arg === '--auth-header-file') {
+      const nextArg = argv[i + 1];
+      if (nextArg && !nextArg.startsWith('-')) {
+        authHeaderFile = nextArg;
         i++;
       }
     } else if (arg === '--pipeline-testing') {
@@ -153,6 +162,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     ...(outputPath && { outputPath }),
     ...(resumeFromWorkspace && { resumeFromWorkspace }),
     ...(authStatePath && { authStatePath }),
+    ...(authHeaderFile && { authHeaderFile }),
   };
 }
 
@@ -330,6 +340,7 @@ function buildPipelineInput(
     ...(workspace.isResume && args.resumeFromWorkspace && { resumeFromWorkspace: args.resumeFromWorkspace }),
     ...(workspace.terminatedWorkflows.length > 0 && { terminatedWorkflows: workspace.terminatedWorkflows }),
     ...(args.authStatePath && { authStatePath: args.authStatePath }),
+    ...(args.authHeaderFile && { authHeaderFile: args.authHeaderFile }),
     ...(Object.keys(orchestration.pipelineConfig).length > 0 && { pipelineConfig: orchestration.pipelineConfig }),
     ...(orchestration.vulnClasses && { vulnClasses: orchestration.vulnClasses }),
     ...(orchestration.exploit !== undefined && { exploit: orchestration.exploit }),

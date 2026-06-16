@@ -192,6 +192,48 @@ If the live check is unreliable in your environment (e.g. no browser available),
 - **`--auth-state` takes precedence over `credentials`.** If the config also contains a `credentials` block, the supplied session is injected and the interactive login preflight is skipped. Stale-session re-login by downstream agents only works if the config also defines a `login_flow` — that is what carries the credentials into the agent's login steps. With credentials but no `login_flow`, agents cannot re-login and will stop if the session goes stale.
 - **Auth-class coverage is reduced.** The `vuln-auth` and `exploit-auth` agents test login and session-management flows, which normally require exercising the real login. In `--auth-state` mode (no credentials) they restore the supplied session but cannot drive an interactive login, so authentication-class testing is limited to what the supplied session already reaches.
 
+## Bearer / Header-Authenticated APIs (`--auth-header-file`)
+
+Stateless APIs (e.g. Spring Security `STATELESS`, OAuth2/SSO resource servers) authenticate with an **`Authorization: Bearer <token>`** request header on every call — they keep no session cookie. A captured browser session (`--auth-state`) is useless against these: the API ignores cookies and the browser never auto-attaches the token as a header.
+
+For these targets, use `--auth-header-file`. You capture the header the real frontend sends, and Shannon Lite injects it into **every** browser request the agents make.
+
+> **Choosing between the two:** `--auth-state` for cookie-session apps; `--auth-header-file` for stateless Bearer/header APIs. They are mutually exclusive.
+
+> **You need a frontend.** This flow assumes a frontend app that performs the (Google SSO) login and then calls the API with a Bearer header. The login URL (frontend) and the scan target (the API origin) are usually **different hosts**. If there is no such frontend, or the token is not sent as a request header, there is nothing to capture.
+
+### 1. Capture the header interactively
+
+```bash
+# One-time: ensure host Playwright + a browser are available.
+npx playwright install chromium
+
+# Opens a browser at the frontend login page; log in with Google SSO, then close the window.
+npx @keygraph/shannon capture-auth \
+  --login-url https://app.example.com/login \
+  --target-origin https://api.example.com
+```
+
+Shannon Lite records only traffic to `--target-origin` (so SSO-provider tokens are never written to disk), parses the recorded HAR for the `Authorization` header sent to the API, and writes `auth-header.txt` (mode `0600`). Capture a different header with `--header-name`. If your environment cannot launch the browser, export a HAR from your browser's DevTools and pass `--from-har <file>`.
+
+### 2. Scan with the captured header
+
+```bash
+npx @keygraph/shannon start -u https://api.example.com -r /path/to/repo --auth-header-file ./auth-header.txt
+```
+
+Shannon Lite mounts the file read-only, injects the header into the browser's `extraHTTPHeaders`, and **restricts the browser to the target origin** so the token never leaks on a cross-origin redirect or resource load.
+
+### Verification
+
+In the preflight, Shannon Lite fetches the target with the header set and reads the HTTP status. A `401`/`403` means the token is not accepted (expired/wrong) and the run **fails fast**. The check only catches outright rejection, so point `-u` at a protected endpoint (e.g. `…/api/…`) for it to be meaningful. Disable with `SHANNON_SKIP_AUTH_HEADER_VERIFY=1`.
+
+### Notes and limitations
+
+- **Treat `auth-header.txt` as a secret** — it holds a live token. Delete it after the scan; it is git-ignored by default.
+- **Static token, no refresh.** If the token expires mid-scan, authenticated requests start failing. Capture immediately before the scan and prefer long-lived tokens. The probe only confirms validity *at the start*.
+- **Origin-confined.** The browser is restricted to the scan target's origin while a header is injected, so the agents will not follow links off-target.
+
 ## Adaptive Thinking
 
 Claude decides when and how deeply to reason on Opus 4.6, 4.7, and 4.8. This is enabled by default whenever a tier resolves to one of these models.

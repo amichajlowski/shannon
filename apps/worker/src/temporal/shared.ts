@@ -32,6 +32,7 @@ export interface PipelineInput {
   vulnClasses?: VulnClass[]; // omitted = all five
   exploit?: boolean; // false skips the exploitation phase
   authStatePath?: string; // Pre-authenticated Playwright storage-state file; injected instead of an interactive login
+  authHeaderFile?: string; // File holding a header line (e.g. Authorization: Bearer ...) injected on every browser request
 }
 
 export interface ResumeState {
