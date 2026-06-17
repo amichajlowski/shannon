@@ -1,0 +1,8 @@
+[auth-proxy] token refreshed; next refresh in ~55 min
+
+[auth-proxy] listening on 0.0.0.0:8899
+[auth-proxy] injecting Authorization for http://ingrid-staging.k8s.cicd.tools.aws.griddynamics.net (other origins pass through)
+[auth-proxy] point the scan at it:
+    --auth-proxy http://host.docker.internal:8899
+[auth-proxy] keep this process running for the whole scan. Ctrl-C to stop.
+

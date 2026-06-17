@@ -28,6 +28,7 @@ CONFIG=""
 LOGIN_URL=""
 TARGET_ORIGIN=""
 REFRESH_URL=""
+NO_BUILD=0
 LAUNCHED=0
 
 log()  { printf '\033[1;36m[audit]\033[0m %s\n' "$*"; }
@@ -58,6 +59,8 @@ OPTIONS (for 'run'; you are prompted for any required value you omit):
   -r, --repo <path>          Repository folder for whitebox source analysis.[required]
   -c, --config <yaml>        Optional Shannon config file.
       --port <n>             Local proxy port.                       [default: 8899]
+      --no-build             Skip rebuilding the worker image (use only if the
+                             image already matches the current source).
 
   Advanced overrides (only if auto-detection is wrong / unsupported):
       --login-url <url>      Login page to open      [default: the website URL]
@@ -126,6 +129,7 @@ while [ $# -gt 0 ]; do
     --target-origin)     TARGET_ORIGIN="$2"; shift 2 ;;
     --refresh-url)       REFRESH_URL="$2"; shift 2 ;;
     --port)              PROXY_PORT="$2"; shift 2 ;;
+    --no-build)          NO_BUILD=1; shift ;;
     -h|--help)           show_help; exit 0 ;;
     *) die "unknown option: $1 (run '$SELF help' for usage)" ;;
   esac
@@ -166,6 +170,16 @@ if ! docker info >/dev/null 2>&1; then
   fi
 fi
 log "Docker is up."
+
+# Rebuild the worker image so the scan runs the CURRENT code (auth features
+# included). A stale image silently ignores --auth-proxy and scans unauthenticated.
+# Done before login so a build failure never wastes an interactive capture.
+if [ "$NO_BUILD" -eq 0 ]; then
+  log "building the worker image (use --no-build to skip if it's already current)..."
+  ./shannon build || die "worker image build failed"
+else
+  log "skipping image build (--no-build) — ensure the image matches current source."
+fi
 
 # ============================ 1. interactive capture + auto-detect ============================
 log "opening a browser for interactive login — complete SSO, click around briefly, then CLOSE the window."
