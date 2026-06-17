@@ -44,9 +44,14 @@ It handles the full flow: interactive SSO login -> confirm token capture ->
 start the auto-refresh proxy -> ensure Docker -> launch Shannon through the proxy.
 
 USAGE:
-  $SELF run [options]      Start an audit. Prompts for anything not given as a flag.
+  $SELF                    Interactive mode (recommended): asks for the URL,
+                           repo path, and refresh endpoint, then runs everything.
+  $SELF run [options]      Non-interactive: provide values as flags (prompts for
+                           anything omitted).
   $SELF stop [--clean]     Stop the auth-proxy. --clean also deletes captured tokens.
   $SELF help               Show this help.
+
+TIP: just run '$SELF' with no flags to be guided through it interactively.
 
 OPTIONS (for 'run'; you are prompted for any required value you omit):
   -u, --url <url>            Target API URL to scan. Point at a PROTECTED path
@@ -99,12 +104,7 @@ stop_proxy() {
 }
 
 # ============================ dispatch ============================
-# No options at all → show help (don't silently drop into prompts).
-if [ $# -eq 0 ]; then
-  show_help
-  exit 0
-fi
-
+# No options at all → interactive mode: fall through to the prompts below.
 case "${1:-}" in
   help|-h|--help)
     show_help
