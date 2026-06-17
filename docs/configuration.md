@@ -269,6 +269,15 @@ npx @keygraph/shannon start -u https://api.example.com -r /path/to/repo \
 
 The worker's browser routes through the proxy; the preflight probe validates the token end-to-end, and the token stays valid across expiry boundaries for the life of the refresh token.
 
+### Keeping the token valid
+
+The proxy refreshes the token on two triggers so a scan never stalls on an expired token:
+
+- **Proactively**, on a timer set to each token's expiry minus a margin. If a scheduled refresh fails, the proxy retries with bounded exponential backoff (up to 4 attempts) while continuing to serve the last token, then re-arms the normal schedule.
+- **Reactively**, when the target rejects an injected token with `401`/`403`. The proxy refreshes once and replays that request a single time with the new token. Concurrent rejections are coalesced behind a single in-flight refresh, so a burst of `401`s triggers only one refresh call. A second rejection after refresh is passed through unchanged — the token genuinely cannot authenticate, and looping would only hammer the API.
+
+All refreshes are logged with timestamps. If the refresh token itself dies mid-scan, the proxy keeps running and logs loud errors rather than exiting, so the scan degrades gracefully instead of crashing.
+
 ### Notes and limitations
 
 - **HTTP targets only** — no HTTPS interception.
