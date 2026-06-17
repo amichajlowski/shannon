@@ -276,6 +276,11 @@ The worker's browser routes through the proxy; the preflight probe validates the
 - **The proxy must stay up** for the entire scan; it holds the live token in memory only.
 - **Treat `auth-session.json` as a secret** — it holds a live refresh token. Git-ignored by default; delete after the scan.
 
+> **One-command operator flow:** `start_shannon_audit.sh` wires `capture-auth`, the
+> `auth-proxy`, and `--auth-proxy` together into a single guided run (interactive
+> login → auto-detect → proxy → scan). See
+> [authenticated-audit-workflow.md](./authenticated-audit-workflow.md).
+
 ## Adaptive Thinking
 
 Claude decides when and how deeply to reason on Opus 4.6, 4.7, and 4.8. This is enabled by default whenever a tier resolves to one of these models.
