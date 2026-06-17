@@ -106,6 +106,9 @@ npx @keygraph/shannon start -u https://example.com -r /path/to/repo -o ./my-repo
 # Named workspace.
 npx @keygraph/shannon start -u https://example.com -r /path/to/repo -w q1-audit
 
+# Pre-authenticated session (no stored credentials; see docs/configuration.md).
+npx @keygraph/shannon start -u https://example.com -r /path/to/repo -c /path/to/my-config.yaml -a ./auth-state.json
+
 # List all workspaces.
 npx @keygraph/shannon workspaces
 ```
@@ -117,6 +120,7 @@ Source-build examples:
 ./shannon start -u https://example.com -r /path/to/repo -c /path/to/my-config.yaml
 ./shannon start -u https://example.com -r /path/to/repo -o ./my-reports
 ./shannon start -u https://example.com -r /path/to/repo -w q1-audit
+./shannon start -u https://example.com -r /path/to/repo -c /path/to/my-config.yaml -a ./auth-state.json
 ./shannon workspaces
 
 # Rebuild the worker image.

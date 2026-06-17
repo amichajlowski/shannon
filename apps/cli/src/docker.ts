@@ -236,6 +236,9 @@ export interface WorkerOptions {
   containerName: string;
   envFlags: string[];
   config?: { hostPath: string; containerPath: string };
+  authState?: { hostPath: string; containerPath: string };
+  authHeaderFile?: { hostPath: string; containerPath: string };
+  authProxy?: string;
   credentials?: string;
   promptsDir?: string;
   outputDir?: string;
@@ -286,6 +289,16 @@ export function spawnWorker(opts: WorkerOptions): ChildProcess {
     args.push('-v', `${opts.config.hostPath}:${opts.config.containerPath}:ro`);
   }
 
+  // Pre-authenticated Playwright session (read-only)
+  if (opts.authState) {
+    args.push('-v', `${opts.authState.hostPath}:${opts.authState.containerPath}:ro`);
+  }
+
+  // Captured auth header file (read-only)
+  if (opts.authHeaderFile) {
+    args.push('-v', `${opts.authHeaderFile.hostPath}:${opts.authHeaderFile.containerPath}:ro`);
+  }
+
   // Output directory for deliverables copy
   if (opts.outputDir) {
     args.push('-v', `${opts.outputDir}:/app/output`);
@@ -310,6 +323,15 @@ export function spawnWorker(opts: WorkerOptions): ChildProcess {
   args.push('--task-queue', opts.taskQueue);
   if (opts.config) {
     args.push('--config', opts.config.containerPath);
+  }
+  if (opts.authState) {
+    args.push('--auth-state', opts.authState.containerPath);
+  }
+  if (opts.authHeaderFile) {
+    args.push('--auth-header-file', opts.authHeaderFile.containerPath);
+  }
+  if (opts.authProxy) {
+    args.push('--auth-proxy', opts.authProxy);
   }
   if (opts.outputDir) {
     args.push('--output', '/app/output');

@@ -12,7 +12,7 @@ import { ensureImage, ensureInfra, randomSuffix, spawnWorker } from '../docker.j
 import { buildEnvFlags, loadEnv, validateCredentials } from '../env.js';
 import { getCredentialsPath, getWorkspacesDir, initHome } from '../home.js';
 import { isLocal } from '../mode.js';
-import { resolveConfig, resolveRepo } from '../paths.js';
+import { resolveAuthHeaderFile, resolveAuthState, resolveConfig, resolveRepo } from '../paths.js';
 import { displaySplash } from '../splash.js';
 
 export interface StartArgs {
@@ -21,6 +21,9 @@ export interface StartArgs {
   config?: string;
   workspace?: string;
   output?: string;
+  authState?: string;
+  authHeaderFile?: string;
+  authProxy?: string;
   pipelineTesting: boolean;
   debug: boolean;
   version: string;
@@ -41,6 +44,34 @@ export async function start(args: StartArgs): Promise<void> {
   // 3. Resolve paths
   const repo = resolveRepo(args.repo);
   const config = args.config ? resolveConfig(args.config) : undefined;
+
+  // A pre-authenticated session is only usable when the config defines an
+  // authentication block (login_url + success_condition) for agents to verify against.
+  // This host-side check is intentionally shallow (the CLI doesn't parse YAML); the worker
+  // preflight enforces that the config actually contains an authentication block.
+  if (args.authState && !config) {
+    console.error('ERROR: --auth-state requires a config (-c) with an authentication block.');
+    console.error('  The config supplies the login_url and success_condition agents use to verify the session.');
+    process.exit(1);
+  }
+
+  // The three auth mechanisms are mutually exclusive: --auth-state (browser
+  // cookies/storage), --auth-header-file (a static request header), and
+  // --auth-proxy (a proxy that injects an auto-refreshed header per request).
+  const authModes = [
+    args.authState && '--auth-state',
+    args.authHeaderFile && '--auth-header-file',
+    args.authProxy && '--auth-proxy',
+  ].filter(Boolean);
+  if (authModes.length > 1) {
+    console.error(`ERROR: pass only one auth mechanism, not multiple (${authModes.join(', ')}).`);
+    console.error('  --auth-state: cookie-session apps; --auth-header-file: a static Bearer/header token;');
+    console.error('  --auth-proxy: auto-refreshed token via a running `shannon auth-proxy`.');
+    process.exit(1);
+  }
+
+  const authState = args.authState ? resolveAuthState(args.authState) : undefined;
+  const authHeaderFile = args.authHeaderFile ? resolveAuthHeaderFile(args.authHeaderFile) : undefined;
 
   // 4. Ensure workspaces dir is writable by container user (UID 1001)
   const workspacesDir = getWorkspacesDir();
@@ -107,6 +138,9 @@ export async function start(args: StartArgs): Promise<void> {
     containerName,
     envFlags: buildEnvFlags(),
     ...(config && { config }),
+    ...(authState && { authState }),
+    ...(authHeaderFile && { authHeaderFile }),
+    ...(args.authProxy && { authProxy: args.authProxy }),
     ...(hasCredentials && { credentials: credentialsPath }),
     ...(promptsDir && { promptsDir }),
     ...(outputDir && { outputDir }),
@@ -231,6 +265,16 @@ function printInfo(
   console.log(`  Workspace:  ${workspace}`);
   if (args.config) {
     console.log(`  Config:     ${path.resolve(args.config)}`);
+  }
+  if (args.authState) {
+    console.log(`  Auth state: ${path.resolve(args.authState)} (pre-authenticated session)`);
+  }
+  if (args.authHeaderFile) {
+    // Print the path only — the file holds a live token; never echo its contents.
+    console.log(`  Auth header: ${path.resolve(args.authHeaderFile)} (injected on every request)`);
+  }
+  if (args.authProxy) {
+    console.log(`  Auth proxy: ${args.authProxy} (auto-refreshed token injected per request)`);
   }
   if (args.pipelineTesting) {
     console.log('  Mode:       Pipeline Testing');

@@ -102,7 +102,7 @@ For source builds, authenticated scans, provider-specific setup, and platform no
 - **Proof-by-exploitation reports**: Shannon Lite reports validated findings with reproducible proof-of-concept steps instead of speculative warnings.
 - **White-box attack planning**: Shannon Lite uses source-code analysis to guide dynamic testing and focus on realistic attack paths.
 - **Autonomous execution**: Shannon Lite launches reconnaissance, vulnerability analysis, exploitation, and report generation from a single command.
-- **Authenticated testing**: Shannon Lite configuration files can describe login flows, test credentials, TOTP, email-based login flows, focus areas, and rules of engagement.
+- **Authenticated testing**: Shannon Lite configuration files can describe login flows, test credentials, TOTP, email-based login flows, focus areas, and rules of engagement. For SSO or no-stored-credentials policies, log in yourself and pass the captured browser session with `--auth-state` (see [Configuration](docs/configuration.md#pre-authenticated-sessions-no-stored-credentials)).
 - **OWASP-focused coverage**: Shannon Lite targets exploitable Injection, XSS, SSRF, Broken Authentication, and Broken Authorization issues.
 - **Resumable workspaces**: Shannon Lite can resume interrupted runs without re-running completed agents.
 

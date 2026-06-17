@@ -5,3 +5,8 @@ credentials/
 dist/
 repos/
 .turbo/
+
+# Captured auth artifacts — hold live session cookies / tokens, never commit
+auth-state.json
+auth-header.txt
+auth-session.json

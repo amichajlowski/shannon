@@ -247,17 +247,61 @@ async function processIncludes(content: string, baseDir: string): Promise<string
   return content;
 }
 
+/**
+ * Agents that own their own login and do NOT @include(shared/_shared-session.txt).
+ * In --auth-state mode the shared session is restored out-of-band only for agents
+ * that include the partial; these two must be told to restore it themselves.
+ */
+const OWN_LOGIN_AGENTS = new Set(['vuln-auth', 'exploit-auth']);
+
+/**
+ * Build the {{LOGIN_INSTRUCTIONS}} text for --auth-state mode (authentication
+ * configured but no credentials). Two shapes:
+ *
+ * - Agents that @include the shared-session partial already had the session
+ *   restored before this step, so they only need a stop-on-failure directive.
+ * - Agents that own their own login (no include) are told to restore the
+ *   supplied session themselves and never attempt an interactive login.
+ *
+ * Values are inlined from `variables` rather than left as placeholders because
+ * this runs after {{AUTH_STATE_FILE}} / {{PLAYWRIGHT_SESSION}} substitution.
+ */
+function buildAuthStateLoginInstructions(promptName: string, variables: PromptVariables): string {
+  if (!OWN_LOGIN_AGENTS.has(promptName)) {
+    return (
+      'A pre-authenticated session was supplied out-of-band and restored before this step. No login flow is ' +
+      'configured and no credentials are available. If session restoration or verification fails, STOP and ' +
+      'report that the supplied session is stale or invalid — do not attempt an interactive login.'
+    );
+  }
+
+  const session = variables.PLAYWRIGHT_SESSION || 'agent1';
+  return (
+    'A pre-authenticated session was supplied via --auth-state and saved to:\n\n' +
+    `  ${variables.AUTH_STATE_FILE}\n\n` +
+    'No credentials are configured. Restore the supplied session on your own browser session before testing:\n\n' +
+    `  playwright-cli -s=${session} state-load ${variables.AUTH_STATE_FILE}\n\n` +
+    'Then verify it per the success_condition in your authentication config. If restoration or verification fails, ' +
+    'STOP and report that the supplied session is stale or invalid — do NOT attempt an interactive login (there ' +
+    'are no credentials to fall back on).'
+  );
+}
+
 function buildAuthContext(config: DistributedConfig | null): string {
   if (!config?.authentication) {
     return 'No authentication configured - unauthenticated testing only';
   }
 
   const auth = config.authentication;
-  const lines = [
-    `- Login type: ${auth.login_type.toUpperCase()}`,
-    `- Username: ${auth.credentials.username}`,
-    `- Login URL: ${auth.login_url}`,
-  ];
+  const lines = [`- Login type: ${auth.login_type.toUpperCase()}`];
+
+  if (auth.credentials?.username) {
+    lines.push(`- Username: ${auth.credentials.username}`);
+  } else {
+    lines.push('- Session: pre-authenticated browser session supplied (no credentials)');
+  }
+
+  lines.push(`- Login URL: ${auth.login_url}`);
 
   if (auth.credentials?.totp_secret) {
     lines.push('- MFA: TOTP enabled');
@@ -273,6 +317,7 @@ async function interpolateVariables(
   config: DistributedConfig | null = null,
   logger: ActivityLogger,
   promptsBaseDir: string = PROMPTS_DIR,
+  promptName: string = '',
 ): Promise<string> {
   try {
     if (!template || typeof template !== 'string') {
@@ -328,7 +373,13 @@ async function interpolateVariables(
       result = result.replace(/{{AUTH_STATE_FILE}}/g, variables.AUTH_STATE_FILE);
     }
 
-    if (config?.authentication?.login_flow) {
+    if (config?.authentication && !config.authentication.credentials) {
+      // Pre-authenticated session mode (--auth-state): no credentials. This is checked
+      // BEFORE login_flow on purpose — a login_flow without credentials cannot be filled
+      // in (the $username/$password placeholders would leak verbatim), so never emit a
+      // half-substituted interactive login. The session is restored out-of-band instead.
+      result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, buildAuthStateLoginInstructions(promptName, variables));
+    } else if (config?.authentication?.login_flow) {
       const loginInstructions = await buildLoginInstructions(config.authentication, logger, promptsBaseDir);
       result = result.replace(/{{LOGIN_INSTRUCTIONS}}/g, loginInstructions);
     } else {
@@ -423,7 +474,7 @@ export async function loadPrompt(
     template = await processIncludes(template, promptsDir);
 
     // 5. Interpolate variables and return final prompt
-    return await interpolateVariables(template, enhancedVariables, config, logger, basePromptsDir);
+    return await interpolateVariables(template, enhancedVariables, config, logger, basePromptsDir, promptName);
   } catch (error) {
     if (error instanceof PentestError) {
       throw error;

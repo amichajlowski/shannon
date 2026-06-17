@@ -76,3 +76,93 @@ export function resolveConfig(configArg: string): MountPair {
     containerPath: `/app/configs/${basename}`,
   };
 }
+
+/**
+ * Resolve --auth-state to an absolute path and container mount.
+ *
+ * The file is a Playwright storage-state export (cookies + origins) produced by
+ * a human logging in interactively (e.g. `playwright codegen --save-storage`).
+ * Validated here on the host so misconfiguration fails before a container spawns.
+ */
+export function resolveAuthState(authStateArg: string): MountPair {
+  const hostPath = path.resolve(authStateArg);
+
+  if (!fs.existsSync(hostPath)) {
+    console.error(`ERROR: Auth-state file not found: ${hostPath}`);
+    process.exit(1);
+  }
+
+  if (!fs.statSync(hostPath).isFile()) {
+    console.error(`ERROR: Auth-state path is not a file: ${hostPath}`);
+    process.exit(1);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(hostPath, 'utf-8'));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`ERROR: Auth-state file is not valid JSON: ${hostPath}`);
+    console.error(`  ${detail}`);
+    console.error('  Expected a Playwright storageState export (e.g. from `playwright codegen --save-storage`).');
+    process.exit(1);
+  }
+
+  const cookieCount = countArray(parsed, 'cookies');
+  const originCount = countArray(parsed, 'origins');
+  if (cookieCount === 0 && originCount === 0) {
+    console.error(`ERROR: Auth-state file has no cookies or origins: ${hostPath}`);
+    console.error('  It does not hold a logged-in session. Log in first, then re-export it:');
+    console.error('  npx playwright codegen --save-storage=auth-state.json <login-url>');
+    process.exit(1);
+  }
+
+  return {
+    hostPath,
+    containerPath: '/app/auth-state/state.json',
+  };
+}
+
+/**
+ * Resolve --auth-header-file to an absolute path and container mount.
+ *
+ * The file holds a single HTTP header line (`Name: Value`, e.g.
+ * `Authorization: Bearer <jwt>`) captured by `shannon capture-auth`. The worker
+ * injects it into every browser request so a stateless Bearer/header API can be
+ * scanned authenticated. Validated here so a malformed file fails before a
+ * container spawns.
+ */
+export function resolveAuthHeaderFile(authHeaderArg: string): MountPair {
+  const hostPath = path.resolve(authHeaderArg);
+
+  if (!fs.existsSync(hostPath)) {
+    console.error(`ERROR: Auth-header file not found: ${hostPath}`);
+    process.exit(1);
+  }
+
+  if (!fs.statSync(hostPath).isFile()) {
+    console.error(`ERROR: Auth-header path is not a file: ${hostPath}`);
+    process.exit(1);
+  }
+
+  const contents = fs.readFileSync(hostPath, 'utf-8').trim();
+  // A single header line: header name, colon, then a non-empty value.
+  if (!/^[A-Za-z0-9-]+:[ \t]*\S.*$/.test(contents.split('\n')[0] ?? '')) {
+    console.error(`ERROR: Auth-header file is not a valid "Name: Value" header line: ${hostPath}`);
+    console.error('  Expected something like: Authorization: Bearer <token>');
+    console.error('  Capture one with: shannon capture-auth --login-url <url> --target-origin <origin>');
+    process.exit(1);
+  }
+
+  return {
+    hostPath,
+    containerPath: '/app/auth-header/header.txt',
+  };
+}
+
+/** Count entries in a top-level array field of a parsed storage-state object. */
+function countArray(parsed: unknown, key: 'cookies' | 'origins'): number {
+  if (typeof parsed !== 'object' || parsed === null) return 0;
+  const value = (parsed as Record<string, unknown>)[key];
+  return Array.isArray(value) ? value.length : 0;
+}

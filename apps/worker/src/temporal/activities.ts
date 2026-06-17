@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ApplicationFailure, Context, heartbeat } from '@temporalio/activity';
-import { writePlaywrightStealthConfig } from '../ai/playwright-config-writer.js';
+import { type InjectedAuthHeader, writePlaywrightStealthConfig } from '../ai/playwright-config-writer.js';
 import { writeUserSettingsForCodePathAvoids } from '../ai/settings-writer.js';
 import { AuditSession } from '../audit/index.js';
 import type { ResumeAttempt } from '../audit/metrics-tracker.js';
@@ -35,6 +35,7 @@ import { runPreflightChecks } from '../services/preflight.js';
 import type { ExploitationDecision, VulnType } from '../services/queue-validation.js';
 import { assembleFinalReport, injectModelIntoReport } from '../services/reporting.js';
 import { validateAuthentication } from '../services/validate-authentication.js';
+import { isAuthHeaderVerificationDisabled, verifyAuthHeaderLive } from '../services/verify-auth-header.js';
 import { AGENTS } from '../session-manager.js';
 import type { AgentName } from '../types/agents.js';
 import { ALL_AGENTS } from '../types/agents.js';
@@ -78,6 +79,9 @@ export interface ActivityInput {
   sastSarifPath?: string;
   skipGitCheck?: boolean;
   providerConfig?: ProviderConfig;
+  authStatePath?: string;
+  authHeaderFile?: string;
+  authProxy?: string;
 }
 
 /**
@@ -485,6 +489,7 @@ export async function runPreflightValidation(input: ActivityInput): Promise<void
       input.skipGitCheck,
       input.apiKey,
       input.providerConfig,
+      input.authStatePath,
     );
 
     if (isErr(result)) {
@@ -555,7 +560,11 @@ export async function runAuthenticationValidation(input: ActivityInput): Promise
     }
 
     const distributedConfig = configResult.value;
-    if (!distributedConfig?.authentication) {
+    // Skip only when there's nothing to do: no auth block AND no supplied session.
+    // When --auth-state is set without an auth block, fall through so
+    // validateAuthentication surfaces the misconfiguration instead of silently
+    // running unauthenticated.
+    if (!distributedConfig?.authentication && !input.authStatePath) {
       logger.info('No authentication configured — skipping credential validation');
       return;
     }
@@ -575,6 +584,7 @@ export async function runAuthenticationValidation(input: ActivityInput): Promise
       ...(input.deliverablesSubdir !== undefined && { deliverablesSubdir: input.deliverablesSubdir }),
       ...(input.promptDir !== undefined && { promptDir: input.promptDir }),
       ...(input.pipelineTestingMode !== undefined && { pipelineTestingMode: input.pipelineTestingMode }),
+      ...(input.authStatePath !== undefined && { authStatePath: input.authStatePath }),
     });
 
     if (isErr(result)) {
@@ -648,15 +658,114 @@ export async function initDeliverableGit(input: ActivityInput): Promise<void> {
  * cwd (disables the Blink AutomationControlled flag, drops the
  * --enable-automation default, and overrides the HeadlessChrome user agent).
  *
- * No-op when the repo already has its own .playwright/cli.config.json.
+ * No-op when the repo already has its own .playwright/cli.config.json — unless
+ * an auth header (--auth-header-file) or auth proxy (--auth-proxy) is supplied,
+ * which is merged in either way so authenticated scans carry the credential.
  */
 export async function syncPlaywrightStealthConfig(input: ActivityInput): Promise<void> {
   const logger = createActivityLogger();
-  const { result, configPath } = await writePlaywrightStealthConfig(input.repoPath);
+  const authHeader = await readInjectedAuthHeader(input);
+  const proxy = input.authProxy ? { url: input.authProxy, origin: new URL(input.webUrl).origin } : undefined;
+
+  const { result, configPath } = await writePlaywrightStealthConfig(input.repoPath, {
+    ...(authHeader && { authHeader }),
+    ...(proxy && { proxy }),
+  });
+
   if (result === 'skipped-existing') {
     logger.info(`Playwright stealth config: leaving existing ${configPath} in place`);
+  } else if (result === 'merged-auth') {
+    logger.info(`Playwright stealth config: merged auth into existing ${configPath}`);
   } else {
     logger.info(`Playwright stealth config: wrote ${configPath}`);
+  }
+  if (authHeader) {
+    // Log the header name and the origin it is confined to — never the value.
+    logger.info('Auth header injected for all browser requests', {
+      headerName: authHeader.name,
+      allowedOrigin: authHeader.origin,
+    });
+  }
+  if (proxy) {
+    logger.info('Auth proxy configured for all browser requests', {
+      proxy: proxy.url,
+      allowedOrigin: proxy.origin,
+    });
+  }
+}
+
+/**
+ * Read and parse the mounted --auth-header-file (a single `Name: Value` line)
+ * and pair it with the target origin so the header is confined to the target.
+ * Returns undefined when no auth header was supplied.
+ */
+async function readInjectedAuthHeader(input: ActivityInput): Promise<InjectedAuthHeader | undefined> {
+  if (!input.authHeaderFile) {
+    return undefined;
+  }
+
+  const raw = (await fs.readFile(input.authHeaderFile, 'utf8')).trim();
+  const line = raw.split('\n')[0]?.trim() ?? '';
+  const colon = line.indexOf(':');
+  if (colon <= 0) {
+    throw new Error(`--auth-header-file does not contain a valid "Name: Value" header line: ${input.authHeaderFile}`);
+  }
+
+  const name = line.slice(0, colon).trim();
+  const value = line.slice(colon + 1).trim();
+  if (!name || !value) {
+    throw new Error(`--auth-header-file header name or value is empty: ${input.authHeaderFile}`);
+  }
+
+  return { name, value, origin: new URL(input.webUrl).origin };
+}
+
+/**
+ * Confirm an injected --auth-header-file actually authenticates against the
+ * target before the pipeline commits. No-op unless an auth header was supplied.
+ * A clean rejection (HTTP 401/403) is non-retryable; transient browser/network
+ * problems retry.
+ */
+export async function verifyAuthHeader(input: ActivityInput): Promise<void> {
+  if (!input.authHeaderFile && !input.authProxy) {
+    return;
+  }
+
+  const logger = createActivityLogger();
+
+  if (isAuthHeaderVerificationDisabled()) {
+    logger.warn(
+      'Live auth-header verification disabled (SHANNON_SKIP_AUTH_HEADER_VERIFY) — injecting the header without ' +
+        'confirming it authenticates against the target.',
+      { webUrl: input.webUrl },
+    );
+    return;
+  }
+
+  try {
+    const result = await verifyAuthHeaderLive({ webUrl: input.webUrl, sourceDir: input.repoPath, logger });
+    if (isErr(result)) {
+      const classified = classifyErrorForTemporal(result.error);
+      const message = truncateErrorMessage(result.error.message);
+      const details = [{ phase: 'auth-header-verification', ...result.error.context }];
+      const failure = classified.retryable
+        ? ApplicationFailure.create({ message, type: classified.type, details })
+        : ApplicationFailure.nonRetryable(message, classified.type, details);
+      truncateStackTrace(failure);
+      throw failure;
+    }
+  } catch (error) {
+    if (error instanceof ApplicationFailure) {
+      throw error;
+    }
+    const classified = classifyErrorForTemporal(error);
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = truncateErrorMessage(rawMessage);
+    const failure = classified.retryable
+      ? ApplicationFailure.create({ message, type: classified.type })
+      : ApplicationFailure.nonRetryable(message, classified.type);
+    truncateStackTrace(failure);
+    throw failure;
   }
 }
 
