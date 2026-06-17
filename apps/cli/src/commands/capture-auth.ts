@@ -37,6 +37,11 @@ export interface CaptureAuthArgs {
 
 const prefix = (): string => (getMode() === 'local' ? './shannon' : 'npx @keygraph/shannon');
 
+function die(message: string): never {
+  console.error(`ERROR: ${message}`);
+  process.exit(1);
+}
+
 export function parseCaptureAuthArgs(argv: string[]): CaptureAuthArgs {
   let loginUrl: string | undefined;
   let targetOrigin: string | undefined;
@@ -106,57 +111,107 @@ export function parseCaptureAuthArgs(argv: string[]): CaptureAuthArgs {
   };
 }
 
-export function captureAuth(args: CaptureAuthArgs): void {
-  if (!args.targetOrigin) {
-    console.error('ERROR: --target-origin <origin> is required (the API origin whose request header to capture).');
-    console.error(`  e.g. ${prefix()} capture-auth --login-url https://app.example.com/login \\`);
-    console.error('         --target-origin https://api.example.com');
-    process.exit(1);
-  }
-  const targetOrigin = normalizeOrigin(args.targetOrigin);
-
-  if (args.withRefresh && !args.refreshUrl) {
-    console.error('ERROR: --with-refresh requires --refresh-url <url> (the endpoint that exchanges a refresh');
-    console.error('  token for a new access token, e.g. https://sso.example.com/auth/token).');
-    process.exit(1);
-  }
+export async function captureAuth(args: CaptureAuthArgs): Promise<void> {
   if (args.withRefresh && args.fromHar) {
     console.error('ERROR: --with-refresh needs an interactive capture (it reads cookies/localStorage); ');
     console.error('  it cannot be combined with --from-har.');
     process.exit(1);
   }
-
-  // 1. Obtain a HAR (+ storageState when seeding refresh) — operator-supplied or interactive.
-  const capture: InteractiveCapture = args.fromHar
-    ? { harPath: path.resolve(args.fromHar) }
-    : captureInteractively(args.loginUrl, targetOrigin, args.withRefresh);
-
-  // 2. Parse the HAR for the named header sent to the target origin.
-  const headerValue = extractHeaderFromHar(capture.harPath, args.headerName, targetOrigin);
-  if (!headerValue) {
-    console.error(`ERROR: No "${args.headerName}" header to ${targetOrigin} was found in the captured traffic.`);
-    console.error('  Possible causes: you did not complete login; the token is not sent as a request header;');
-    console.error('  or --target-origin does not match the API the frontend calls. Check the API origin and retry.');
+  if (!args.loginUrl && !args.fromHar) {
+    console.error('ERROR: --login-url <url> is required (the website you log into).');
     process.exit(1);
   }
+  const loginOrigin = args.loginUrl ? normalizeOrigin(args.loginUrl) : '';
 
-  // 3. Write the single header line, readable only by the current user.
-  const outPath = path.resolve(args.output);
-  const canonicalName = canonicalHeaderName(args.headerName);
-  fs.writeFileSync(outPath, `${canonicalName}: ${headerValue}\n`, { encoding: 'utf-8', mode: 0o600 });
-  console.log(`\nCaptured "${canonicalName}" header → ${outPath} (treat as a secret; delete after the scan).`);
+  // Auto-detect mode: nothing about the auth plumbing is required from the
+  // operator. We record the whole login session and read it back.
+  const autoDetect = !args.targetOrigin || (args.withRefresh && !args.refreshUrl);
 
-  // 4. Optionally seed the refresh token so `auth-proxy` can keep the token fresh.
-  if (args.withRefresh && args.refreshUrl) {
-    writeRefreshSession(capture.storagePath, args.refreshTokenKey, args.refreshUrl, targetOrigin, args.sessionOutput);
-  }
+  // 1. Capture the login session. In auto mode record the FULL HAR (all origins)
+  //    so the API and auth-service traffic are visible; it is deleted after parse.
+  const capture: InteractiveCapture = args.fromHar
+    ? { harPath: path.resolve(args.fromHar) }
+    : captureInteractively(args.loginUrl, args.targetOrigin, { fullHar: autoDetect, withStorage: args.withRefresh });
 
-  console.log('\nNext:');
-  if (args.withRefresh) {
-    console.log(`  ${prefix()} auth-proxy --session ${args.sessionOutput}        # leave running`);
-    console.log(`  ${prefix()} start -u ${targetOrigin} -r <repo> --auth-proxy http://host.docker.internal:8899`);
-  } else {
-    console.log(`  ${prefix()} start -u ${targetOrigin} -r <repo> --auth-header-file ${args.output}`);
+  try {
+    // 2. Resolve the refresh endpoint (auto: from the SPA's config.json) and the
+    //    auth service host (so we don't mistake it for the API).
+    let refreshUrl = args.refreshUrl;
+    if (args.withRefresh && !refreshUrl) {
+      refreshUrl = await detectRefreshUrl(loginOrigin);
+      if (!refreshUrl) {
+        die(
+          'could not auto-detect the token refresh endpoint from the site config. ' +
+            'Pass it explicitly with --refresh-url <url>.',
+        );
+      }
+    }
+    const authHost = refreshUrl ? new URL(refreshUrl).host : '';
+
+    // 3. Resolve the API origin + the auth header it carries (auto: from the HAR).
+    let targetOrigin = args.targetOrigin ? normalizeOrigin(args.targetOrigin) : '';
+    const detected = detectApiAuth(capture.harPath, args.headerName, {
+      loginOrigin,
+      excludeHosts: [authHost],
+      preferOrigin: targetOrigin || loginOrigin,
+    });
+    if (!targetOrigin) {
+      if (!detected) {
+        die(
+          `could not auto-detect an API carrying a "${args.headerName}" header during login. ` +
+            'The app may not use a request-header token, or you did not exercise it. ' +
+            'You can set the API origin explicitly with --target-origin.',
+        );
+      }
+      targetOrigin = detected.origin;
+    }
+
+    const headerValue = detected?.value ?? extractHeaderFromHar(capture.harPath, args.headerName, targetOrigin);
+    if (!headerValue) {
+      die(
+        `no "${args.headerName}" header to ${targetOrigin} was found in the captured traffic — ` +
+          'complete login and exercise the app, or check the API origin.',
+      );
+    }
+
+    // 4. Write the header line (0600).
+    const outPath = path.resolve(args.output);
+    const canonicalName = canonicalHeaderName(args.headerName);
+    fs.writeFileSync(outPath, `${canonicalName}: ${headerValue}\n`, { encoding: 'utf-8', mode: 0o600 });
+
+    console.log('\nDetected:');
+    console.log(`  API origin     : ${targetOrigin}`);
+    console.log(`  Auth header    : ${canonicalName}`);
+    if (detected?.sampleUrl) console.log(`  Sample API call: ${detected.sampleUrl}`);
+    if (refreshUrl) console.log(`  Refresh endpoint: ${refreshUrl}`);
+    console.log(`\nCaptured "${canonicalName}" header → ${outPath} (treat as a secret; delete after the scan).`);
+
+    // 5. Seed the refresh session so `auth-proxy` can keep the token fresh.
+    if (args.withRefresh && refreshUrl) {
+      const scanUrl = detected?.sampleUrl ?? `${targetOrigin}/`;
+      writeRefreshSession(
+        capture.storagePath,
+        args.refreshTokenKey,
+        refreshUrl,
+        targetOrigin,
+        scanUrl,
+        args.sessionOutput,
+      );
+    }
+
+    console.log('\nNext:');
+    if (args.withRefresh) {
+      console.log(`  ${prefix()} auth-proxy --session ${args.sessionOutput}        # leave running`);
+      console.log(`  ${prefix()} start -u ${targetOrigin} -r <repo> --auth-proxy http://host.docker.internal:8899`);
+    } else {
+      console.log(`  ${prefix()} start -u ${targetOrigin} -r <repo> --auth-header-file ${args.output}`);
+    }
+  } finally {
+    // The full HAR + storageState hold live tokens (incl. the SSO provider's) —
+    // delete the temp capture directory now that we've extracted what we need.
+    if (!args.fromHar && capture.tempDir) {
+      fs.rmSync(capture.tempDir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -171,6 +226,7 @@ function writeRefreshSession(
   refreshTokenKey: string,
   refreshUrl: string,
   targetOrigin: string,
+  scanUrl: string,
   sessionOutput: string,
 ): void {
   if (!storagePath) {
@@ -199,27 +255,120 @@ function writeRefreshSession(
     process.exit(1);
   }
 
-  const session = { refreshUrl, refreshToken, targetOrigin };
+  const session = { refreshUrl, refreshToken, targetOrigin, scanUrl };
   const sessionPath = path.resolve(sessionOutput);
   fs.writeFileSync(sessionPath, `${JSON.stringify(session, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 });
   console.log(`Seeded refresh session → ${sessionPath} (holds a live refresh token; treat as a secret).`);
+}
+
+/**
+ * Auto-detect the token refresh endpoint from the SPA's runtime config. The
+ * convention across the platform is `<origin>/assets/config/config.json` with an
+ * `authUrl` pointing at the auth service; the refresh endpoint is `authUrl/auth/token`.
+ * Returns undefined if no config/authUrl is found.
+ */
+async function detectRefreshUrl(loginOrigin: string): Promise<string | undefined> {
+  if (!loginOrigin) return undefined;
+  const candidates = ['/assets/config/config.json', '/assets/config.json', '/config.json'];
+  for (const pathSuffix of candidates) {
+    try {
+      const res = await fetch(`${loginOrigin}${pathSuffix}`);
+      if (!res.ok) continue;
+      const cfg = (await res.json()) as { authUrl?: unknown };
+      if (typeof cfg.authUrl === 'string' && cfg.authUrl) {
+        return `${cfg.authUrl.replace(/\/+$/, '')}/auth/token`;
+      }
+    } catch {
+      // try the next candidate
+    }
+  }
+  return undefined;
+}
+
+interface DetectedApiAuth {
+  origin: string;
+  value: string;
+  sampleUrl?: string;
+}
+
+/**
+ * Scan the HAR for requests carrying the auth header (e.g. `Authorization`) and
+ * infer the API origin, the live header value, and a sample protected URL.
+ * Excludes the auth-service and SSO-provider hosts.
+ */
+function detectApiAuth(
+  harPath: string,
+  headerName: string,
+  opts: { loginOrigin: string; excludeHosts: string[]; preferOrigin: string },
+): DetectedApiAuth | null {
+  let har: { log?: { entries?: HarEntry[] } };
+  try {
+    har = JSON.parse(fs.readFileSync(harPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+
+  const ssoNoise = /(^|\.)(google|googleapis|gstatic|accounts\.google)\.com$/i;
+  const byOrigin = new Map<string, { value: string; sampleUrl?: string; count: number }>();
+
+  for (const entry of har.log?.entries ?? []) {
+    const url = entry.request?.url;
+    if (!url) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    if (ssoNoise.test(parsed.host) || opts.excludeHosts.includes(parsed.host)) continue;
+
+    const header = (entry.request?.headers ?? []).find((h) => h.name.toLowerCase() === headerName && h.value.trim());
+    if (!header) continue;
+
+    const prev = byOrigin.get(parsed.origin) ?? { value: header.value.trim(), count: 0 };
+    prev.value = header.value.trim(); // latest wins
+    prev.count += 1;
+    // Prefer a sample URL that looks like an API call.
+    if (!prev.sampleUrl || /\/api(\/|$)/.test(parsed.pathname)) {
+      prev.sampleUrl = `${parsed.origin}${parsed.pathname}`;
+    }
+    byOrigin.set(parsed.origin, prev);
+  }
+
+  if (byOrigin.size === 0) return null;
+
+  // Prefer the requested/login origin if it carries the header, else the busiest.
+  const preferred = byOrigin.get(opts.preferOrigin);
+  let chosenOrigin = opts.preferOrigin;
+  let chosen = preferred;
+  if (!chosen) {
+    for (const [origin, info] of byOrigin) {
+      if (!chosen || info.count > chosen.count) {
+        chosen = info;
+        chosenOrigin = origin;
+      }
+    }
+  }
+  if (!chosen) return null;
+  return { origin: chosenOrigin, value: chosen.value, ...(chosen.sampleUrl && { sampleUrl: chosen.sampleUrl }) };
 }
 
 interface InteractiveCapture {
   harPath: string;
   /** Playwright storageState (cookies + localStorage), written when withStorage. */
   storagePath?: string;
+  /** Temp dir holding the capture; the caller deletes it after parsing. */
+  tempDir?: string;
 }
 
 /** Drive `npx playwright open`, capturing a HAR and (optionally) storageState. */
 function captureInteractively(
   loginUrl: string | undefined,
-  targetOrigin: string,
-  withStorage: boolean,
+  targetOrigin: string | undefined,
+  opts: { fullHar: boolean; withStorage: boolean },
 ): InteractiveCapture {
   if (!loginUrl) {
-    console.error('ERROR: --login-url <url> is required (unless --from-har is given).');
-    process.exit(1);
+    die('--login-url <url> is required (unless --from-har is given).');
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shannon-capture-'));
@@ -227,19 +376,24 @@ function captureInteractively(
   const storagePath = path.join(dir, 'storage.json');
 
   console.log('Opening a browser. Log in (Google SSO, MFA, consent), then CLOSE the browser window to finish.');
-  console.log(`Recording requests to ${targetOrigin} ...\n`);
+  console.log('Tip: after you land in the app, click around for a few seconds so it makes authenticated calls.\n');
 
-  // `--save-har-glob` keeps only target-origin traffic in the HAR, so SSO-provider
-  // tokens (e.g. accounts.google.com) are never written to disk. `--save-storage`
-  // captures cookies + localStorage so the refresh token can be seeded.
-  const cmd = ['playwright', 'open', `--save-har=${harPath}`, `--save-har-glob=${targetOrigin}/**`];
-  if (withStorage) {
+  // In auto-detect mode we need cross-origin traffic (the API + auth service), so
+  // the full HAR is recorded — and deleted by the caller right after parsing. When
+  // the target origin is known, scope the HAR to it so SSO-provider tokens (e.g.
+  // accounts.google.com) are never written. `--save-storage` seeds the refresh token.
+  const cmd = ['playwright', 'open', `--save-har=${harPath}`];
+  if (!opts.fullHar && targetOrigin) {
+    cmd.push(`--save-har-glob=${targetOrigin}/**`);
+  }
+  if (opts.withStorage) {
     cmd.push(`--save-storage=${storagePath}`);
   }
   cmd.push(loginUrl);
   const result = spawnSync('npx', cmd, { stdio: 'inherit' });
 
   if (result.error || result.status !== 0) {
+    fs.rmSync(dir, { recursive: true, force: true });
     console.error('\nERROR: failed to run `npx playwright open`. Ensure Playwright and a browser are installed:');
     console.error('  npx playwright install chromium');
     console.error('Alternatively, export a HAR from your browser DevTools and pass --from-har <file>.');
@@ -247,10 +401,10 @@ function captureInteractively(
   }
 
   if (!fs.existsSync(harPath)) {
-    console.error('ERROR: no HAR was written — the browser closed before any target traffic was recorded.');
-    process.exit(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+    die('no HAR was written — the browser closed before any traffic was recorded.');
   }
-  return { harPath, ...(withStorage && fs.existsSync(storagePath) && { storagePath }) };
+  return { harPath, tempDir: dir, ...(opts.withStorage && fs.existsSync(storagePath) && { storagePath }) };
 }
 
 interface HarHeader {

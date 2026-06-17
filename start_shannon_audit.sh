@@ -34,8 +34,6 @@ log()  { printf '\033[1;36m[audit]\033[0m %s\n' "$*"; }
 err()  { printf '\033[1;31m[audit] ERROR:\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
-origin_of() { node -e 'process.stdout.write(new URL(process.argv[1]).origin)' "$1" 2>/dev/null || true; }
-
 show_help() {
   cat <<EOF
 start_shannon_audit.sh — run an authenticated Shannon scan with auto-refreshed tokens.
@@ -44,42 +42,39 @@ It handles the full flow: interactive SSO login -> confirm token capture ->
 start the auto-refresh proxy -> ensure Docker -> launch Shannon through the proxy.
 
 USAGE:
-  $SELF                    Interactive mode (recommended): asks for the URL,
-                           repo path, and refresh endpoint, then runs everything.
+  $SELF                    Interactive mode (recommended): asks only for the
+                           website URL and repo path, then runs everything.
   $SELF run [options]      Non-interactive: provide values as flags (prompts for
                            anything omitted).
   $SELF stop [--clean]     Stop the auth-proxy. --clean also deletes captured tokens.
   $SELF help               Show this help.
 
-TIP: just run '$SELF' with no flags to be guided through it interactively.
+TIP: just run '$SELF' with no flags. You only need the website + repo —
+     the login URL, API origin, refresh endpoint, and scan target are detected
+     automatically from your login session.
 
 OPTIONS (for 'run'; you are prompted for any required value you omit):
-  -u, --url <url>            Target API URL to scan. Point at a PROTECTED path
-                             (e.g. https://app.example.com/api/...) so the auth
-                             check is meaningful.                        [required]
-  -r, --repo <path>         Repository folder for whitebox source analysis. [required]
-      --refresh-url <url>    Endpoint the app calls to mint a fresh token
-                             (e.g. https://sso.example.com/auth/token).  [required]
-      --login-url <url>      Frontend login page to open for SSO.
-                             [default: the scan URL's origin + "/"]
-      --target-origin <orig> API origin to authenticate.
-                             [default: the scan URL's origin]
+  -u, --url <url>            Website URL you log into.                     [required]
+  -r, --repo <path>          Repository folder for whitebox source analysis.[required]
   -c, --config <yaml>        Optional Shannon config file.
-      --port <n>             Local proxy port.                      [default: 8899]
+      --port <n>             Local proxy port.                       [default: 8899]
+
+  Advanced overrides (only if auto-detection is wrong / unsupported):
+      --login-url <url>      Login page to open      [default: the website URL]
+      --target-origin <orig> API origin to authenticate    [default: auto-detected]
+      --refresh-url <url>    Token refresh endpoint          [default: auto-detected
+                             from the site's config]
 
 NOTES:
   - Requires host Playwright + a browser once:  npx playwright install chromium
   - The auth-proxy keeps running after launch (the scan needs it). Stop it with
     '$SELF stop' once the scan has finished.
-  - Per-app value is the refresh URL (no default — it differs per application).
-    For an app whose token field/header differs from the platform norm, capture
-    separately with 'shannon capture-auth --refresh-token-key/--header-name'.
+  - Auto-detection targets the internal SSO platform (Bearer token + a
+    config-declared refresh endpoint). For an app that differs, use the advanced
+    overrides or 'shannon capture-auth --refresh-token-key/--header-name'.
 
 EXAMPLE:
-  $SELF run \\
-    -u https://app.example.com/api/resource \\
-    -r /path/to/repo \\
-    --refresh-url https://sso.example.com/auth/token
+  $SELF run -u https://app.example.com -r /path/to/repo
 EOF
 }
 
@@ -137,10 +132,12 @@ while [ $# -gt 0 ]; do
 done
 
 # ============================ gather inputs ============================
+# Self-service: we only need the website and the repo. The login URL, API
+# origin, refresh endpoint, and scan target are auto-detected from the login.
 if [ -z "$SCAN_URL" ]; then
-  read -r -p "Target API URL to scan (point at a protected path, e.g. .../api/...): " SCAN_URL
+  read -r -p "Website URL (the app you log into): " SCAN_URL
 fi
-[ -n "$SCAN_URL" ] || die "a target URL is required"
+[ -n "$SCAN_URL" ] || die "a website URL is required"
 
 if [ -z "$REPO" ]; then
   read -r -p "Repository folder (source for whitebox analysis): " REPO
@@ -148,22 +145,8 @@ fi
 [ -n "$REPO" ] || die "a repository folder is required"
 [ -d "$REPO" ] || die "repository folder not found: $REPO"
 
-# Sensible defaults derived from the scan URL; confirm/override interactively.
-DEF_ORIGIN="$(origin_of "$SCAN_URL")"
-[ -n "$DEF_ORIGIN" ] || die "could not parse an origin from: $SCAN_URL"
-
-if [ -z "$TARGET_ORIGIN" ]; then
-  read -r -p "API origin to authenticate [$DEF_ORIGIN]: " TARGET_ORIGIN
-  TARGET_ORIGIN="${TARGET_ORIGIN:-$DEF_ORIGIN}"
-fi
-if [ -z "$LOGIN_URL" ]; then
-  read -r -p "Frontend login URL to open [$DEF_ORIGIN/]: " LOGIN_URL
-  LOGIN_URL="${LOGIN_URL:-$DEF_ORIGIN/}"
-fi
-if [ -z "$REFRESH_URL" ]; then
-  read -r -p "Token refresh endpoint (the URL the app calls to mint a new token): " REFRESH_URL
-fi
-[ -n "$REFRESH_URL" ] || die "a token refresh endpoint is required (no default — it differs per application)"
+# The website URL is the login URL unless one was passed explicitly.
+[ -n "$LOGIN_URL" ] || LOGIN_URL="$SCAN_URL"
 
 # ============================ preflight ============================
 [ -x "./shannon" ] || die "./shannon entrypoint not found — run from the Shannon repo root"
@@ -184,15 +167,16 @@ if ! docker info >/dev/null 2>&1; then
 fi
 log "Docker is up."
 
-# ============================ 1. interactive capture ============================
-log "opening a browser for interactive login — complete SSO, then CLOSE the window."
+# ============================ 1. interactive capture + auto-detect ============================
+log "opening a browser for interactive login — complete SSO, click around briefly, then CLOSE the window."
+log "(the refresh endpoint, API origin, and scan target are auto-detected from the login)"
 ./shannon capture-auth \
   --with-refresh \
-  --refresh-url   "$REFRESH_URL" \
-  --login-url     "$LOGIN_URL" \
-  --target-origin "$TARGET_ORIGIN" \
-  --output        "$HEADER_FILE" \
-  --session-output "$SESSION_FILE"
+  --login-url      "$LOGIN_URL" \
+  --output         "$HEADER_FILE" \
+  --session-output "$SESSION_FILE" \
+  ${TARGET_ORIGIN:+--target-origin "$TARGET_ORIGIN"} \
+  ${REFRESH_URL:+--refresh-url "$REFRESH_URL"}
 
 # ============================ 2. confirm capture ============================
 [ -f "$SESSION_FILE" ] || die "capture did not produce $SESSION_FILE"
@@ -206,6 +190,13 @@ node -e '
   process.exit(0);
 ' "$SESSION_FILE" || die "captured session is invalid — re-run and complete login"
 log "tokens captured and validated ($SESSION_FILE)."
+
+# Use the auto-detected protected API URL as the scan target (falls back to the website).
+DETECTED_SCAN_URL="$(node -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(s.scanUrl||s.targetOrigin||"")}catch{}' "$SESSION_FILE")"
+if [ -n "$DETECTED_SCAN_URL" ]; then
+  SCAN_URL="$DETECTED_SCAN_URL"
+fi
+log "scan target: $SCAN_URL"
 
 # ============================ 3. start the auth-proxy ============================
 # Replace any proxy we previously started (rotates the session file safely).

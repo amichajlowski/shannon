@@ -292,7 +292,7 @@ switch (command) {
     workspaces(getVersion());
     break;
   case 'capture-auth':
-    captureAuth(parseCaptureAuthArgs(args.slice(1)));
+    await captureAuth(parseCaptureAuthArgs(args.slice(1)));
     break;
   case 'auth-proxy':
     await authProxy(parseAuthProxyArgs(args.slice(1)));
