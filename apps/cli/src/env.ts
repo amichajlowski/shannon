@@ -27,6 +27,9 @@ const FORWARD_VARS = [
   'ANTHROPIC_LARGE_MODEL',
   'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
   'CLAUDE_ADAPTIVE_THINKING',
+  // Auth-verification escape hatches must reach the worker to take effect.
+  'SHANNON_SKIP_AUTH_HEADER_VERIFY',
+  'SHANNON_SKIP_AUTH_STATE_VERIFY',
 ] as const;
 
 /**

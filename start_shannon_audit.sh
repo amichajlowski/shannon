@@ -236,6 +236,12 @@ kill -0 "$PROXY_PID" 2>/dev/null || die "auth-proxy exited unexpectedly"
 log "auth-proxy is live (pid $PROXY_PID). $(grep 'next refresh' "$PROXY_LOG" | tail -1)"
 
 # ============================ 4. launch Shannon ============================
+# Skip the in-browser auth-header preflight probe in proxy mode: the proxy has
+# already validated the credential by performing a live token refresh at startup,
+# so the extra browser probe is redundant (and the agents surface any real auth
+# failure during recon anyway). Override by exporting SHANNON_SKIP_AUTH_HEADER_VERIFY=0.
+export SHANNON_SKIP_AUTH_HEADER_VERIFY="${SHANNON_SKIP_AUTH_HEADER_VERIFY:-1}"
+
 log "launching Shannon against $SCAN_URL ..."
 set +e
 ./shannon start \
