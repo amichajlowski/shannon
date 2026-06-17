@@ -60,6 +60,7 @@ interface CliArgs {
   resumeFromWorkspace?: string;
   authStatePath?: string;
   authHeaderFile?: string;
+  authProxy?: string;
 }
 
 function showUsage(): void {
@@ -73,6 +74,7 @@ function showUsage(): void {
   console.log('  --workspace <name>     Resume from existing workspace');
   console.log('  --auth-state <path>    Pre-authenticated Playwright storage-state file');
   console.log('  --auth-header-file <path>  Header line injected on every request (Bearer/header APIs)');
+  console.log('  --auth-proxy <url>     Proxy that injects an auto-refreshed auth header per request');
   console.log('  --pipeline-testing     Use minimal prompts for fast testing\n');
 }
 
@@ -91,6 +93,7 @@ function parseCliArgs(argv: string[]): CliArgs {
   let resumeFromWorkspace: string | undefined;
   let authStatePath: string | undefined;
   let authHeaderFile: string | undefined;
+  let authProxy: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -130,6 +133,12 @@ function parseCliArgs(argv: string[]): CliArgs {
         authHeaderFile = nextArg;
         i++;
       }
+    } else if (arg === '--auth-proxy') {
+      const nextArg = argv[i + 1];
+      if (nextArg && !nextArg.startsWith('-')) {
+        authProxy = nextArg;
+        i++;
+      }
     } else if (arg === '--pipeline-testing') {
       pipelineTestingMode = true;
     } else if (arg && !arg.startsWith('-')) {
@@ -163,6 +172,7 @@ function parseCliArgs(argv: string[]): CliArgs {
     ...(resumeFromWorkspace && { resumeFromWorkspace }),
     ...(authStatePath && { authStatePath }),
     ...(authHeaderFile && { authHeaderFile }),
+    ...(authProxy && { authProxy }),
   };
 }
 
@@ -341,6 +351,7 @@ function buildPipelineInput(
     ...(workspace.terminatedWorkflows.length > 0 && { terminatedWorkflows: workspace.terminatedWorkflows }),
     ...(args.authStatePath && { authStatePath: args.authStatePath }),
     ...(args.authHeaderFile && { authHeaderFile: args.authHeaderFile }),
+    ...(args.authProxy && { authProxy: args.authProxy }),
     ...(Object.keys(orchestration.pipelineConfig).length > 0 && { pipelineConfig: orchestration.pipelineConfig }),
     ...(orchestration.vulnClasses && { vulnClasses: orchestration.vulnClasses }),
     ...(orchestration.exploit !== undefined && { exploit: orchestration.exploit }),

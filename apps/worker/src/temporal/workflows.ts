@@ -246,6 +246,7 @@ export async function pentestPipeline(input: PipelineInput): Promise<PipelineSta
     ...(input.providerConfig !== undefined && { providerConfig: input.providerConfig }),
     ...(input.authStatePath !== undefined && { authStatePath: input.authStatePath }),
     ...(input.authHeaderFile !== undefined && { authHeaderFile: input.authHeaderFile }),
+    ...(input.authProxy !== undefined && { authProxy: input.authProxy }),
   };
 
   const selectedVulnClasses: readonly VulnClass[] =
@@ -445,9 +446,9 @@ export async function pentestPipeline(input: PipelineInput): Promise<PipelineSta
     await preflightActs.syncPlaywrightStealthConfig(activityInput);
 
     // === Auth header verification ===
-    // When --auth-header-file is supplied, confirm the injected header is
-    // accepted by the target before committing to the pipeline. No-op otherwise.
-    if (input.authHeaderFile) {
+    // When --auth-header-file or --auth-proxy is supplied, confirm the injected
+    // credential is accepted by the target before committing. No-op otherwise.
+    if (input.authHeaderFile || input.authProxy) {
       state.currentPhase = 'auth-validation';
       await authValidationActs.verifyAuthHeader(activityInput);
       log.info('Auth header verification passed');

@@ -81,6 +81,7 @@ export interface ActivityInput {
   providerConfig?: ProviderConfig;
   authStatePath?: string;
   authHeaderFile?: string;
+  authProxy?: string;
 }
 
 /**
@@ -658,17 +659,23 @@ export async function initDeliverableGit(input: ActivityInput): Promise<void> {
  * --enable-automation default, and overrides the HeadlessChrome user agent).
  *
  * No-op when the repo already has its own .playwright/cli.config.json — unless
- * an auth header is supplied (--auth-header-file), which is merged in either way
- * so authenticated Bearer/header API scans actually carry the credential.
+ * an auth header (--auth-header-file) or auth proxy (--auth-proxy) is supplied,
+ * which is merged in either way so authenticated scans carry the credential.
  */
 export async function syncPlaywrightStealthConfig(input: ActivityInput): Promise<void> {
   const logger = createActivityLogger();
   const authHeader = await readInjectedAuthHeader(input);
-  const { result, configPath } = await writePlaywrightStealthConfig(input.repoPath, authHeader);
+  const proxy = input.authProxy ? { url: input.authProxy, origin: new URL(input.webUrl).origin } : undefined;
+
+  const { result, configPath } = await writePlaywrightStealthConfig(input.repoPath, {
+    ...(authHeader && { authHeader }),
+    ...(proxy && { proxy }),
+  });
+
   if (result === 'skipped-existing') {
     logger.info(`Playwright stealth config: leaving existing ${configPath} in place`);
-  } else if (result === 'merged-auth-header') {
-    logger.info(`Playwright stealth config: merged auth header into existing ${configPath}`);
+  } else if (result === 'merged-auth') {
+    logger.info(`Playwright stealth config: merged auth into existing ${configPath}`);
   } else {
     logger.info(`Playwright stealth config: wrote ${configPath}`);
   }
@@ -677,6 +684,12 @@ export async function syncPlaywrightStealthConfig(input: ActivityInput): Promise
     logger.info('Auth header injected for all browser requests', {
       headerName: authHeader.name,
       allowedOrigin: authHeader.origin,
+    });
+  }
+  if (proxy) {
+    logger.info('Auth proxy configured for all browser requests', {
+      proxy: proxy.url,
+      allowedOrigin: proxy.origin,
     });
   }
 }
@@ -714,7 +727,7 @@ async function readInjectedAuthHeader(input: ActivityInput): Promise<InjectedAut
  * problems retry.
  */
 export async function verifyAuthHeader(input: ActivityInput): Promise<void> {
-  if (!input.authHeaderFile) {
+  if (!input.authHeaderFile && !input.authProxy) {
     return;
   }
 

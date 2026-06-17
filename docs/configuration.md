@@ -234,6 +234,48 @@ In the preflight, Shannon Lite fetches the target with the header set and reads 
 - **Static token, no refresh.** If the token expires mid-scan, authenticated requests start failing. Capture immediately before the scan and prefer long-lived tokens. The probe only confirms validity *at the start*.
 - **Origin-confined.** The browser is restricted to the scan target's origin while a header is injected, so the agents will not follow links off-target.
 
+## Long, Auto-Refreshed Authenticated Scans (`--auth-proxy`)
+
+A static `--auth-header-file` token works until it expires. When the token is short-lived (e.g. a 1-hour JWT) and the scan runs for hours, use `--auth-proxy`: a host-side process keeps the token fresh by replaying the app's **refresh-token** flow, and injects the current token into every browser request through a local proxy — no manual re-login during the scan.
+
+This works when the app refreshes via a **refresh-token endpoint** (`POST <refresh-url>` with the refresh token → a new access token, the way the frontend itself refreshes). It is **HTTP-only** (the proxy injects headers in cleartext; HTTPS targets would need TLS interception and are not supported).
+
+### 1. Capture with a refresh token
+
+```bash
+npx playwright install chromium   # one-time
+npx @keygraph/shannon capture-auth --with-refresh \
+  --refresh-url   https://sso.example.com/auth/token \
+  --login-url     https://app.example.com/login \
+  --target-origin https://api.example.com
+```
+
+Log in via SSO and close the browser. This writes `auth-header.txt` (the access token) **and** `auth-session.json` (`{ refreshUrl, refreshToken, targetOrigin }`, mode `0600`). The refresh token is read from the captured cookies/localStorage; override its key with `--refresh-token-key` if the app names it differently.
+
+### 2. Start the refresh proxy (leave it running)
+
+```bash
+npx @keygraph/shannon auth-proxy --session auth-session.json
+```
+
+It refreshes the token just before each expiry (persisting the rotated refresh token back to `auth-session.json`) and serves a forward proxy on `0.0.0.0:8899`. **Keep this process running for the whole scan** — if it stops, the browser loses authentication.
+
+### 3. Run the scan through the proxy
+
+```bash
+npx @keygraph/shannon start -u https://api.example.com -r /path/to/repo \
+  --auth-proxy http://host.docker.internal:8899
+```
+
+The worker's browser routes through the proxy; the preflight probe validates the token end-to-end, and the token stays valid across expiry boundaries for the life of the refresh token.
+
+### Notes and limitations
+
+- **HTTP targets only** — no HTTPS interception.
+- **Refresh token has its own (server-side) lifetime.** When it is finally rejected, re-run `capture-auth --with-refresh`. Fine for multi-hour scans.
+- **The proxy must stay up** for the entire scan; it holds the live token in memory only.
+- **Treat `auth-session.json` as a secret** — it holds a live refresh token. Git-ignored by default; delete after the scan.
+
 ## Adaptive Thinking
 
 Claude decides when and how deeply to reason on Opus 4.6, 4.7, and 4.8. This is enabled by default whenever a tier resolves to one of these models.

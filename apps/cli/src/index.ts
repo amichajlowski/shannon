@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { authProxy, parseAuthProxyArgs } from './commands/auth-proxy.js';
 import { build } from './commands/build.js';
 import { captureAuth, parseCaptureAuthArgs } from './commands/capture-auth.js';
 import { logs } from './commands/logs.js';
@@ -92,6 +93,8 @@ Options for 'start':
                             requires an 'authentication' block in the config)
       --auth-header-file <path>  Header line (e.g. Authorization: Bearer ...) injected
                             on every request, for Bearer/header-authenticated APIs
+      --auth-proxy <url>    Proxy (from 'auth-proxy') that injects an auto-refreshed
+                            token per request — for long scans on short-lived tokens
       --pipeline-testing    Use minimal prompts for fast testing
       --debug               Preserve worker container after exit for log inspection
 
@@ -101,6 +104,14 @@ Options for 'capture-auth' (capture a request header for Bearer/header APIs):
       --header-name <name>   Header to capture (default: authorization)
   -o, --output <path>        Output file (default: ./auth-header.txt)
       --from-har <file>      Parse a DevTools-exported HAR instead of opening a browser
+      --with-refresh         Also seed a refresh token (for 'auth-proxy' auto-refresh)
+      --refresh-url <url>    Refresh endpoint (required with --with-refresh)
+      --session-output <path>  Refresh session file (default: ./auth-session.json)
+
+Options for 'auth-proxy' (keep a short-lived token fresh during a long scan):
+      --session <path>       Refresh session file from capture-auth (default: ./auth-session.json)
+      --port <n>             Listen port (default: 8899)
+      --bind <addr>          Bind address (default: 0.0.0.0, so the container can reach it)
 
 Examples:
   ${prefix} start -u https://example.com -r ${mode === 'local' ? 'my-repo' : './my-repo'}
@@ -117,6 +128,12 @@ Bearer/header-authenticated APIs (stateless; token sent as a request header):
   # Requires host Playwright + a browser: npx playwright install chromium
   ${prefix} capture-auth --login-url https://app.example.com/login --target-origin https://api.example.com
   ${prefix} start -u https://api.example.com -r /path/to/repo --auth-header-file auth-header.txt
+
+Long scans on short-lived tokens (auto-refresh — no manual re-login mid-scan):
+  ${prefix} capture-auth --with-refresh --refresh-url https://sso.example.com/auth/token \\
+      --login-url https://app.example.com/login --target-origin https://api.example.com
+  ${prefix} auth-proxy --session auth-session.json     # leave running in another terminal
+  ${prefix} start -u https://api.example.com -r /path/to/repo --auth-proxy http://host.docker.internal:8899
 ${
   mode === 'local'
     ? `
@@ -136,6 +153,7 @@ interface ParsedStartArgs {
   output?: string;
   authState?: string;
   authHeaderFile?: string;
+  authProxy?: string;
   pipelineTesting: boolean;
   debug: boolean;
 }
@@ -148,6 +166,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
   let output: string | undefined;
   let authState: string | undefined;
   let authHeaderFile: string | undefined;
+  let authProxy: string | undefined;
   let pipelineTesting = false;
   let debug = false;
 
@@ -204,6 +223,12 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
           i++;
         }
         break;
+      case '--auth-proxy':
+        if (next && !next.startsWith('-')) {
+          authProxy = next;
+          i++;
+        }
+        break;
       case '--pipeline-testing':
         pipelineTesting = true;
         break;
@@ -233,6 +258,7 @@ function parseStartArgs(argv: string[]): ParsedStartArgs {
     ...(output && { output }),
     ...(authState && { authState }),
     ...(authHeaderFile && { authHeaderFile }),
+    ...(authProxy && { authProxy }),
   };
 }
 
@@ -267,6 +293,9 @@ switch (command) {
     break;
   case 'capture-auth':
     captureAuth(parseCaptureAuthArgs(args.slice(1)));
+    break;
+  case 'auth-proxy':
+    await authProxy(parseAuthProxyArgs(args.slice(1)));
     break;
   case 'status':
     status();

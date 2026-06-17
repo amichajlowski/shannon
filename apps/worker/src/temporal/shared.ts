@@ -33,6 +33,7 @@ export interface PipelineInput {
   exploit?: boolean; // false skips the exploitation phase
   authStatePath?: string; // Pre-authenticated Playwright storage-state file; injected instead of an interactive login
   authHeaderFile?: string; // File holding a header line (e.g. Authorization: Bearer ...) injected on every browser request
+  authProxy?: string; // Proxy URL (e.g. http://host.docker.internal:8899) that injects an auto-refreshed auth header per request
 }
 
 export interface ResumeState {

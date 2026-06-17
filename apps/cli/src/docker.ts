@@ -238,6 +238,7 @@ export interface WorkerOptions {
   config?: { hostPath: string; containerPath: string };
   authState?: { hostPath: string; containerPath: string };
   authHeaderFile?: { hostPath: string; containerPath: string };
+  authProxy?: string;
   credentials?: string;
   promptsDir?: string;
   outputDir?: string;
@@ -328,6 +329,9 @@ export function spawnWorker(opts: WorkerOptions): ChildProcess {
   }
   if (opts.authHeaderFile) {
     args.push('--auth-header-file', opts.authHeaderFile.containerPath);
+  }
+  if (opts.authProxy) {
+    args.push('--auth-proxy', opts.authProxy);
   }
   if (opts.outputDir) {
     args.push('--output', '/app/output');

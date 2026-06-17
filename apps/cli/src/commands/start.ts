@@ -23,6 +23,7 @@ export interface StartArgs {
   output?: string;
   authState?: string;
   authHeaderFile?: string;
+  authProxy?: string;
   pipelineTesting: boolean;
   debug: boolean;
   version: string;
@@ -54,11 +55,18 @@ export async function start(args: StartArgs): Promise<void> {
     process.exit(1);
   }
 
-  // --auth-state (browser cookies/storage) and --auth-header-file (a request
-  // header) are different, mutually exclusive auth mechanisms.
-  if (args.authState && args.authHeaderFile) {
-    console.error('ERROR: pass either --auth-state or --auth-header-file, not both.');
-    console.error('  --auth-state is for cookie-session apps; --auth-header-file is for Bearer/header APIs.');
+  // The three auth mechanisms are mutually exclusive: --auth-state (browser
+  // cookies/storage), --auth-header-file (a static request header), and
+  // --auth-proxy (a proxy that injects an auto-refreshed header per request).
+  const authModes = [
+    args.authState && '--auth-state',
+    args.authHeaderFile && '--auth-header-file',
+    args.authProxy && '--auth-proxy',
+  ].filter(Boolean);
+  if (authModes.length > 1) {
+    console.error(`ERROR: pass only one auth mechanism, not multiple (${authModes.join(', ')}).`);
+    console.error('  --auth-state: cookie-session apps; --auth-header-file: a static Bearer/header token;');
+    console.error('  --auth-proxy: auto-refreshed token via a running `shannon auth-proxy`.');
     process.exit(1);
   }
 
@@ -132,6 +140,7 @@ export async function start(args: StartArgs): Promise<void> {
     ...(config && { config }),
     ...(authState && { authState }),
     ...(authHeaderFile && { authHeaderFile }),
+    ...(args.authProxy && { authProxy: args.authProxy }),
     ...(hasCredentials && { credentials: credentialsPath }),
     ...(promptsDir && { promptsDir }),
     ...(outputDir && { outputDir }),
@@ -263,6 +272,9 @@ function printInfo(
   if (args.authHeaderFile) {
     // Print the path only — the file holds a live token; never echo its contents.
     console.log(`  Auth header: ${path.resolve(args.authHeaderFile)} (injected on every request)`);
+  }
+  if (args.authProxy) {
+    console.log(`  Auth proxy: ${args.authProxy} (auto-refreshed token injected per request)`);
   }
   if (args.pipelineTesting) {
     console.log('  Mode:       Pipeline Testing');
