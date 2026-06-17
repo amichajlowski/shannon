@@ -31,7 +31,8 @@ REFRESH_URL=""
 NO_BUILD=0
 LAUNCHED=0
 
-log()  { printf '\033[1;36m[audit]\033[0m %s\n' "$*"; }
+log()    { printf '\033[1;36m[audit]\033[0m %s\n' "$*"; }
+banner() { printf '\033[1;33m\n========================================================================\n  %s\n========================================================================\033[0m\n' "$*"; }
 err()  { printf '\033[1;31m[audit] ERROR:\033[0m %s\n' "$*" >&2; }
 die()  { err "$*"; exit 1; }
 
@@ -182,8 +183,9 @@ else
 fi
 
 # ============================ 1. interactive capture + auto-detect ============================
-log "opening a browser for interactive login — complete SSO, click around briefly, then CLOSE the window."
+log "opening a browser for interactive login."
 log "(the refresh endpoint, API origin, and scan target are auto-detected from the login)"
+banner "COMPLETE SSO LOGIN, CLICK AROUND BRIEFLY, THEN CLOSE THE BROWSER WINDOW TO CONTINUE."
 ./shannon capture-auth \
   --with-refresh \
   --login-url      "$LOGIN_URL" \
