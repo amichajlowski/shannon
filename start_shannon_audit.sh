@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
 #
-# audit.sh — one-shot wrapper for an authenticated Shannon scan against an
-# SSO/Bearer API that uses short-lived tokens.
+# start_shannon_audit.sh — one-shot wrapper for an authenticated Shannon scan
+# against an SSO/Bearer API that uses short-lived, auto-refreshed tokens.
 #
 # It walks the whole flow so you never run the individual commands:
 #   1. interactive login (browser opens; you do Google SSO by hand)
 #   2. confirms the access + refresh tokens were captured
 #   3. starts the auth-proxy (auto-refreshes the token for the whole scan)
 #   4. ensures Docker infra and launches Shannon through the proxy
-#
-# Usage:
-#   ./audit.sh                       # prompts for the URL and repo
-#   ./audit.sh -u <api-url> -r <repo> [--config <yaml>] [--login-url <url>]
-#              [--target-origin <origin>] [--refresh-url <url>] [--port <n>]
-#   ./audit.sh stop [--clean]        # stop the proxy (and --clean: delete captured tokens)
-#
-# The proxy keeps running after launch (the scan needs it). Stop it with
-# `./audit.sh stop` once the scan has finished.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+SELF="./$(basename "$0")"
 
 # --- defaults (override via flags or the interactive prompts) ---
 PROXY_PORT="8899"
@@ -43,6 +36,48 @@ die()  { err "$*"; exit 1; }
 
 origin_of() { node -e 'process.stdout.write(new URL(process.argv[1]).origin)' "$1" 2>/dev/null || true; }
 
+show_help() {
+  cat <<EOF
+start_shannon_audit.sh — run an authenticated Shannon scan with auto-refreshed tokens.
+
+It handles the full flow: interactive SSO login -> confirm token capture ->
+start the auto-refresh proxy -> ensure Docker -> launch Shannon through the proxy.
+
+USAGE:
+  $SELF run [options]      Start an audit. Prompts for anything not given as a flag.
+  $SELF stop [--clean]     Stop the auth-proxy. --clean also deletes captured tokens.
+  $SELF help               Show this help.
+
+OPTIONS (for 'run'; you are prompted for any required value you omit):
+  -u, --url <url>            Target API URL to scan. Point at a PROTECTED path
+                             (e.g. https://app.example.com/api/...) so the auth
+                             check is meaningful.                        [required]
+  -r, --repo <path>         Repository folder for whitebox source analysis. [required]
+      --refresh-url <url>    Endpoint the app calls to mint a fresh token
+                             (e.g. https://sso.example.com/auth/token).  [required]
+      --login-url <url>      Frontend login page to open for SSO.
+                             [default: the scan URL's origin + "/"]
+      --target-origin <orig> API origin to authenticate.
+                             [default: the scan URL's origin]
+  -c, --config <yaml>        Optional Shannon config file.
+      --port <n>             Local proxy port.                      [default: 8899]
+
+NOTES:
+  - Requires host Playwright + a browser once:  npx playwright install chromium
+  - The auth-proxy keeps running after launch (the scan needs it). Stop it with
+    '$SELF stop' once the scan has finished.
+  - Per-app value is the refresh URL (no default — it differs per application).
+    For an app whose token field/header differs from the platform norm, capture
+    separately with 'shannon capture-auth --refresh-token-key/--header-name'.
+
+EXAMPLE:
+  $SELF run \\
+    -u https://app.example.com/api/resource \\
+    -r /path/to/repo \\
+    --refresh-url https://sso.example.com/auth/token
+EOF
+}
+
 # ============================ stop subcommand ============================
 stop_proxy() {
   if [ -f "$PID_FILE" ]; then
@@ -63,11 +98,28 @@ stop_proxy() {
   fi
 }
 
-if [ "${1:-}" = "stop" ]; then
-  shift
-  stop_proxy "${1:-}"
+# ============================ dispatch ============================
+# No options at all → show help (don't silently drop into prompts).
+if [ $# -eq 0 ]; then
+  show_help
   exit 0
 fi
+
+case "${1:-}" in
+  help|-h|--help)
+    show_help
+    exit 0
+    ;;
+  stop)
+    shift
+    stop_proxy "${1:-}"
+    exit 0
+    ;;
+  run)
+    # Explicit start verb; remaining args are options (any missing are prompted).
+    shift
+    ;;
+esac
 
 # ============================ parse flags ============================
 while [ $# -gt 0 ]; do
@@ -79,8 +131,8 @@ while [ $# -gt 0 ]; do
     --target-origin)     TARGET_ORIGIN="$2"; shift 2 ;;
     --refresh-url)       REFRESH_URL="$2"; shift 2 ;;
     --port)              PROXY_PORT="$2"; shift 2 ;;
-    -h|--help)           sed -n '2,30p' "$0"; exit 0 ;;
-    *) die "unknown option: $1 (see ./audit.sh --help)" ;;
+    -h|--help)           show_help; exit 0 ;;
+    *) die "unknown option: $1 (run '$SELF help' for usage)" ;;
   esac
 done
 
@@ -197,5 +249,5 @@ LAUNCHED=1
 trap - EXIT
 echo
 log "scan launched. The auth-proxy (pid $PROXY_PID) MUST stay running until the scan finishes."
-log "  stop it when done:   ./audit.sh stop          (add --clean to delete captured tokens)"
+log "  stop it when done:   $SELF stop          (add --clean to delete captured tokens)"
 log "  proxy log:           $PROXY_LOG"
